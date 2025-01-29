@@ -8,7 +8,7 @@ const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
 const { use } = require("../Route/UserRouter");
 const SelectedDoner = require("../Model/selectedDoner");
 const { applyAdditionalFilters } = require('../Utills/filterControl'); 
-const { filterDonorsByLocation } = require('../Utills/filterControl'); 
+const { filterWorkerByLocation } = require('../Utills/filterControl'); 
 
 const SUPPORTED_PLATFORMS = {
     web: ['accessToken', 'email', 'displayName'],
@@ -46,8 +46,8 @@ const createUser = async (req, res) => {
             password,
             usertype,
             avatar: {
-                user_id: "user1",
-                url: "www.hm.in"
+                user_id: " ",
+                url: " "
             },
        });
 
@@ -362,7 +362,7 @@ const getAllProvider = async (req, res) => {
             // If radius filter is provided (in km)
             if (radius && latitude && longitude) {
                 // Filter donors based on location and radius
-                userdetail = await filterDonorsByLocation(userdetail, radius, latitude, longitude);
+                userdetail = await filterWorkerByLocation(userdetail, radius, latitude, longitude);
             }
 
         } else {

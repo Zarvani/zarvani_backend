@@ -7,7 +7,6 @@ const Middleware = require('./Middleware/Middleware');
 const verifyRouter=require("./Route/VerifyRouter")
 const documentUpload=require('./Route/DocumentRoute')
 const adminVerify=require("./Route/AdminRouter")
-const ChatUser=require("./Route/chatRouter")
 const subscribe=require("./Route/subscriberRoute")
 const location=require("./Route/locationRoute")
 
@@ -25,7 +24,6 @@ app.use("/api/v1", userRouter);
 app.use("/api/v1", verifyRouter);
 app.use("/api/v1", documentUpload);
 app.use("/api/v1", adminVerify);
-app.use("/api/v1", ChatUser);
 app.use("/api/v1", subscribe);
 app.use("/api/v1", location);
 app.use(Middleware);

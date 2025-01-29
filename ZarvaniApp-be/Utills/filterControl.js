@@ -40,7 +40,7 @@ const calculateDistance = (point1, point2) => {
 };
 
 // Function to filter donors based on radius and location
-const filterDonorsByLocation = async (userdetail, radius, latitude, longitude) => {
+const filterWorkerByLocation = async (userdetail, radius, latitude, longitude) => {
     const radiusInMeters = radius === "50" ? 50000 : 100000; // 50km or 100km in meters
 
     // Fetch recipient's location
@@ -60,4 +60,4 @@ const filterDonorsByLocation = async (userdetail, radius, latitude, longitude) =
     });
 };
 
-module.exports={applyAdditionalFilters,filterDonorsByLocation}
+module.exports={applyAdditionalFilters,filterWorkerByLocation}
