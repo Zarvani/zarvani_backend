@@ -4,14 +4,6 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const crypto = require('crypto');
 
-const organCategories = [
-    'Heart', 'Lungs', 'Liver', 'Kidneys', 'Pancreas', 'Intestines',
-    'Corneas', 'Skin', 'Heart Valves', 'Blood Vessels and Veins',
-    'Tendons and Ligaments', 'Bone', 'Uterus', 'Ovaries', 'Eggs (Oocytes)',
-    'Fallopian Tubes', 'Testicles', 'Sperm', 'Bone Marrow and Stem Cells',
-    'Blood and Plasma', 'Umbilical Cord Blood', 'Liver Segment',
-    'Kidney', 'Lung Lobe', 'Skin (partial)', 'Bone Marrow and Stem Cells (regenerative)'
-  ];
 
 const UserSchema = new mongoose.Schema({
     authProvider: {
@@ -88,11 +80,6 @@ const UserSchema = new mongoose.Schema({
         enum: ["Male", "Female", "Other"],
         required: false
     },
-    bloodGroup: {
-        type: String,
-        enum: ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-", "Unknown"],
-        required: false
-    },
     city: {
         type: String,
         required: [false, "City is required"]
@@ -105,11 +92,6 @@ const UserSchema = new mongoose.Schema({
         type: String,
         required: [false, "Country is required"]
     },
-    bloodGroup: {
-        type: String,
-        enum: ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-", "Unknown"],
-        required: [false, "Blood group is required"]
-    }, 
     phoneCode: {
         type: Number,
         required: [false, "Phone number is required"],
@@ -120,19 +102,9 @@ const UserSchema = new mongoose.Schema({
     },
     usertype: {
         type: String,
-        enum: ["recipient", "donor","Admin"],
+        enum: ["Customer", "serviceProvider","Admin"],
         required: [false, "User type is required"]
     },
-    organDonations: {
-    type: [String], 
-    validate: {
-      validator: function (value) {
-        return value.every((item) => organCategories.includes(item));
-      },
-      message: "Invalid doner type selected"
-    },
-    required: [false, "Doner type is required"]
-  },
     avatar: {
         user_id: {
             type: String,
@@ -150,7 +122,7 @@ UserSchema.pre("save", async function (next) {
     if (!this.isModified("password")) {
         next();
     }
-    this.password = await bcrypt.hash(this.password, 10)
+    this.password = bcrypt.hash(this.password, 10)
 })
 // generate jwt tokens and store in cookie
 UserSchema.methods.getJwTToken = function () {

@@ -13,7 +13,7 @@ const {createUser
     forgetPassword,
     checkProfileCompletion,uploadProfilePhoto,
     deleteProfilePhoto,
-    getDonerDetails,
+    getAllProviderDetails,
 }=require("../Controller/Usercontroller");
 const upload = require('../Utills/multer'); 
 
@@ -27,7 +27,7 @@ router.route('/google-login').post(loginWithGoogle);
 router.route('/forget-Password').post(forgetPassword);
 router.route('/Facebook-login').post(loginWithFacebook);
 router.route("/profile").get(Authentication, getProfile)
-router.route("/doner/:id").get(Authentication, getDonerDetails)
+router.route("/ServicesProvider/:id").get(Authentication, getAllProviderDetails)
 router.route("/update-Profile").patch(Authentication,updateProfileid)
 router.route("/upload-Profile-Photo").post(Authentication,upload.single('file'),uploadProfilePhoto)
 router.route("/check-Profile-Completion").get(Authentication,checkProfileCompletion)
@@ -35,7 +35,7 @@ router.route("/update-password").put(Authentication, updateProfilePassword)
 router.route("/update-Email").put(Authentication, updateEmail)
 router.route("/delete-Profile-Photo").delete(Authentication, deleteProfilePhoto)
 router.route("/delete-User/:id").delete(Authentication, deleteUser)
-router.route("/getallProvider").get(Authentication,AuthorizeRole("recipient"), getAllProvider)
+router.route("/getallProvider").get(Authentication,AuthorizeRole("Customer"), getAllProvider)
 router.route("/logoutuser").delete(Logout);
 
 module.exports = router;

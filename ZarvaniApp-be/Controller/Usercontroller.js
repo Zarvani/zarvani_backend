@@ -19,7 +19,7 @@ const SUPPORTED_PLATFORMS = {
 
 const createUser = async (req, res) => {
     try {
-        const { firstname, midname, lastname, dateofbirth, gender, city,state,phoneCode,phoneNumber,bloodGroup, country, email, password, usertype } = req.body;
+        const { firstname, midname, lastname, dateofbirth, gender, city,state,phoneCode,phoneNumber, country, email, password, usertype } = req.body;
 
         // Check if the user already exists
         const existingUser = await UserData.findOne({ email });
@@ -42,7 +42,6 @@ const createUser = async (req, res) => {
             country,
             phoneCode,
             phoneNumber,
-            bloodGroup,
             email,
             password,
             usertype,
@@ -351,28 +350,14 @@ const getAllProvider = async (req, res) => {
     try {
         const { usertype, _id: userId } = req.user;
         let userdetail;
-        const { country, state, gender, city, bloodGroup, organDonations, radius, latitude, longitude } = req.query;
+        const { country, state, gender, city,radius, latitude, longitude } = req.query;
 
-        if (usertype === "recipient") {
-            // Get all donors
-            userdetail = await UserData.find({ usertype: "donor" });
-
-            // Get already selected donors for this recipient
-            const selectedDoners = await SelectedDoner.find({ 
-                userId: userId,
-                expireDate: { $gt: new Date() } // Only get active selections
-            });
-
-            // Get array of selected donor IDs
-            const selectedDonerIds = selectedDoners.map(selection => selection.donerId);
-
-            // Filter out already selected donors
-            userdetail = userdetail.filter(user => 
-                !selectedDonerIds.includes(user._id.toString())
-            );
+        if (usertype === "Customer") {
+            // Get all serviceProvide
+            userdetail = await UserData.find({ usertype: "serviceProvider" });
 
             // Apply additional filters (country, state, gender, city, etc.)
-            userdetail = applyAdditionalFilters(userdetail, { country, state, gender, city, bloodGroup, organDonations });
+            userdetail = applyAdditionalFilters(userdetail, { country, state, gender, city});
 
             // If radius filter is provided (in km)
             if (radius && latitude && longitude) {
@@ -409,7 +394,6 @@ const getAllProvider = async (req, res) => {
                 country: user.country,
                 state: user.state,
                 city: user.city,
-                organDonations: user.organDonations || [],
                 age,
             };
         });
@@ -427,7 +411,7 @@ const getAllProvider = async (req, res) => {
     }
 };
 
-const getDonerDetails = async (req, res) => {
+const getAllProviderDetails = async (req, res) => {
     try {
         const userId  = req.params.id; 
         const UserDetails = await UserData.findById(userId)
@@ -462,9 +446,7 @@ const updateProfileid = async (req, res) => {
             usertype,
             country,
             phoneCode,
-            organDonations: Array.isArray(organDonations) ? organDonations : [],
-            phoneNumber,
-            bloodGroup 
+            phoneNumber 
         };
         const userprofile = await UserData.findByIdAndUpdate(req.user.id, newUserData, {
             new: true,
@@ -589,7 +571,7 @@ const checkProfileCompletion = async (req, res) => {
 
         const requiredFields = [
             'firstname', 'lastname', 'dateofbirth', 'gender', 'email', 
-            'password', 'city', 'state', 'country', 'bloodGroup', 'phoneNumber', 
+            'password', 'city', 'state', 'country',  'phoneNumber', 
             'usertype'
         ];
 
@@ -763,5 +745,5 @@ module.exports = {
     uploadProfilePhoto,
     deleteProfilePhoto,
     deleteUser,
-    getDonerDetails,
+    getAllProviderDetails,
 }
