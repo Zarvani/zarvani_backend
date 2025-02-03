@@ -6,7 +6,6 @@ const { OAuth2Client } = require('google-auth-library');
 const jwt = require("jsonwebtoken");
 const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
 const { use } = require("../Route/UserRouter");
-const SelectedDoner = require("../Model/selectedDoner");
 const { applyAdditionalFilters } = require('../Utills/filterControl'); 
 const { filterWorkerByLocation } = require('../Utills/filterControl'); 
 
