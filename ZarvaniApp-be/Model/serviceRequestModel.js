@@ -1,5 +1,15 @@
 const mongoose = require('mongoose');
 
+const SERVICE_TYPE_IDS = {
+  Electrician: 'SRV-ELEC',
+  Plumber: 'SRV-PLMB',
+  Carpenter: 'SRV-CARP',
+  Mechanic: 'SRV-MECH',
+  'Laundry Worker': 'SRV-LAUN',
+  Housekeeper: 'SRV-HKPR',
+  Mover: 'SRV-MOVE',
+};
+
 const serviceSchema = new mongoose.Schema(
   {
     userId: {
@@ -14,6 +24,11 @@ const serviceSchema = new mongoose.Schema(
     serviceManType: {
       type: String,
       required: true,
+      enum: Object.keys(SERVICE_TYPE_IDS),
+    },
+    serviceId: {
+      type: String,
+      unique: true,
     },
     files: {
       type: [String],
@@ -26,7 +41,6 @@ const serviceSchema = new mongoose.Schema(
         },
         {
           validator: function (files) {
-           
             return files.every(file => /\.(jpg|png|mp4)$/i.test(file));
           },
           message: 'Files must be in jpg, png, or mp4 format.',
@@ -36,5 +50,13 @@ const serviceSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+// Pre-save middleware to generate serviceId
+serviceSchema.pre('save', function (next) {
+  if (!this.serviceId && this.serviceManType in SERVICE_TYPE_IDS) {
+    this.serviceId = `${SERVICE_TYPE_IDS[this.serviceManType]}-${Date.now()}`;
+  }
+  next();
+});
 
 module.exports = mongoose.model('Service', serviceSchema);
