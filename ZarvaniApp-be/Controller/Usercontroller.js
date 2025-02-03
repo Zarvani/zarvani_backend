@@ -19,7 +19,7 @@ const SUPPORTED_PLATFORMS = {
 
 const createUser = async (req, res) => {
     try {
-        const { firstname, midname, lastname, dateofbirth, gender, city,state,phoneCode,phoneNumber, country, email, password, usertype } = req.body;
+        const { firstname, midname, lastname, gender, city,state,phoneCode,phoneNumber, country, email, password, usertype } = req.body;
 
         // Check if the user already exists
         const existingUser = await UserData.findOne({ email });
@@ -35,7 +35,6 @@ const createUser = async (req, res) => {
             firstname,
             midname,
             lastname,
-            dateofbirth,
             gender,
             city,
             state,
@@ -372,19 +371,7 @@ const getAllProvider = async (req, res) => {
             });
         }
 
-        const calculateAge = (dateOfBirth) => {
-            const today = new Date();
-            const birthDate = new Date(dateOfBirth);
-            let age = today.getFullYear() - birthDate.getFullYear();
-            const monthDifference = today.getMonth() - birthDate.getMonth();
-            if (monthDifference < 0 || (monthDifference === 0 && today.getDate() < birthDate.getDate())) {
-                age--;
-            }
-            return age;
-        };
-
         const transformedUserDetails = userdetail.map(user => {
-            const age = calculateAge(user.dateofbirth);
             return {
                 id: user.id,
                 firstname: user.firstname,
@@ -394,7 +381,7 @@ const getAllProvider = async (req, res) => {
                 country: user.country,
                 state: user.state,
                 city: user.city,
-                age,
+                usertype:user.usertype,
             };
         });
 
@@ -433,7 +420,7 @@ const getAllProviderDetails = async (req, res) => {
 };
 const updateProfileid = async (req, res) => {
     try {
-        const { firstname, middlename, lastname, dateofbirth, gender,city, state, country,phoneCode,phoneNumber,usertype,organDonations,bloodGroup } = req.body;
+        const { firstname, middlename, lastname, dateofbirth, gender,city, state, country,phoneCode,phoneNumber} = req.body;
 
         const newUserData = {
             firstname,
@@ -443,7 +430,6 @@ const updateProfileid = async (req, res) => {
             gender,
             city,
             state,
-            usertype,
             country,
             phoneCode,
             phoneNumber 
@@ -571,7 +557,7 @@ const checkProfileCompletion = async (req, res) => {
 
         const requiredFields = [
             'firstname', 'lastname', 'dateofbirth', 'gender', 'email', 
-            'password', 'city', 'state', 'country',  'phoneNumber', 
+            'city', 'state', 'country',  'phoneNumber', 
             'usertype'
         ];
 

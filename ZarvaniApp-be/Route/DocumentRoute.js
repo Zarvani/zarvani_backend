@@ -11,7 +11,7 @@ const {
 router.route('/Document/AadharCard')
     .post(Authentication,  upload.single('file'), uploadServiceProviderDocuments.AadharCard);
 router.route('/Document/drivers-license')
-    .post(Authentication,  upload.single('file'), uploadServiceProviderDocuments.driversLicense);
+    .post(Authentication,  upload.single('file'), uploadServiceProviderDocuments.ProfessionalDocument);
 router.route('/Document/PanCard')
     .post(Authentication,  upload.single('file'), uploadServiceProviderDocuments.PanCard);
 router.route('/getAlldocument/:id')
