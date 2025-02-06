@@ -36,7 +36,7 @@ const UserSchema = new mongoose.Schema({
     stripeCustomerId: String,
     firstname: {
         type: String,
-        required: [true, "First name is required"],
+        required: [false, "First name is required"],
         maxLength: [30, "First name cannot exceed 30 characters"],
         minLength: [4, "First name must be at least 4 characters"],
         trim: true
@@ -50,7 +50,7 @@ const UserSchema = new mongoose.Schema({
     },
     lastname: {
         type: String,
-        required: [true, "Last name is required"],
+        required: [false, "Last name is required"],
         maxLength: [30, "Last name cannot exceed 30 characters"],
         minLength: [4, "Last name must be at least 4 characters"],
         trim: true
@@ -102,7 +102,7 @@ const UserSchema = new mongoose.Schema({
     },
     usertype: {
         type: String,
-        enum: ["Customer", "serviceProvider","Admin"],
+        enum: ["customer", "serviceprovider","admin"],
         required: [false, "User type is required"]
     },
     avatar: {
@@ -122,7 +122,7 @@ UserSchema.pre("save", async function (next) {
     if (!this.isModified("password")) {
         next();
     }
-    this.password = bcrypt.hash(this.password, 10)
+    this.password = await bcrypt.hash(this.password, 10)
 })
 // generate jwt tokens and store in cookie
 UserSchema.methods.getJwTToken = function () {

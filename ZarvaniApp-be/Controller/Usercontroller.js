@@ -59,7 +59,7 @@ const createUser = async (req, res) => {
 };
 const Loginuser = async (req, res) => {
     let { email, password } = req.body;
-
+     console.log( email, password)
     if (!email || !password) {
         return res.status(500).json({
             success: false,

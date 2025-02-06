@@ -1,6 +1,6 @@
 const Location=require('../Model/locationModel')
 
-const applyAdditionalFilters = (users, { country, state, gender, city, bloodGroup, organDonations }) => {
+const applyAdditionalFilters = (users, { country, state, city }) => {
     let filteredUsers = users;
 
     if (country) {
@@ -9,19 +9,8 @@ const applyAdditionalFilters = (users, { country, state, gender, city, bloodGrou
     if (state) {
         filteredUsers = filteredUsers.filter(user => user.state === state);
     }
-    if (gender) {
-        filteredUsers = filteredUsers.filter(user => user.gender === gender);
-    }
     if (city) {
         filteredUsers = filteredUsers.filter(user => user.city === city);
-    }
-    if (bloodGroup) {
-        filteredUsers = filteredUsers.filter(user => user.bloodGroup === bloodGroup);
-    }
-    if (organDonations) {
-        filteredUsers = filteredUsers.filter(user => 
-            user.organDonations && user.organDonations.some(donation => organDonations.includes(donation))
-        );
     }
 
     return filteredUsers;
