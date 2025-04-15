@@ -9,16 +9,12 @@ const { use } = require("../Route/UserRouter");
 const { applyAdditionalFilters } = require('../Utills/filterControl'); 
 const { filterWorkerByLocation } = require('../Utills/filterControl'); 
 
-const SUPPORTED_PLATFORMS = {
-    web: ['accessToken', 'email', 'displayName'],
-    ios: ['idToken', 'email', 'displayName'],
-    android: ['idToken', 'email', 'displayName'],
-    macos: ['accessToken', 'email', 'displayName']
-};
+
 
 const createUser = async (req, res) => {
     try {
-        const { firstname, midname, lastname, gender, city,state,phoneCode,phoneNumber, country, email, password, usertype } = req.body;
+        const {email, password, usertype } = req.body;
+        console.log(req.body)
 
         // Check if the user already exists
         const existingUser = await UserData.findOne({ email });
@@ -29,24 +25,12 @@ const createUser = async (req, res) => {
             });
         }
 
-        // Create the new user
+        
         const newUser = await UserData.create({
-            firstname,
-            midname,
-            lastname,
-            gender,
-            city,
-            state,
-            country,
-            phoneCode,
-            phoneNumber,
+           
             email,
             password,
             usertype,
-            avatar: {
-                user_id: " ",
-                url: " "
-            },
        });
 
         setToken(newUser, 201, res);
@@ -59,7 +43,7 @@ const createUser = async (req, res) => {
 };
 const Loginuser = async (req, res) => {
     let { email, password } = req.body;
-     console.log( email, password)
+    
     if (!email || !password) {
         return res.status(500).json({
             success: false,

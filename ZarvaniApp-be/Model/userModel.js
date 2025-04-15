@@ -6,51 +6,18 @@ const crypto = require('crypto');
 
 
 const UserSchema = new mongoose.Schema({
-    authProvider: {
-        type: String,
-        enum: ['local', 'google', 'apple', 'facebook'],
-        default: 'local'
-    },
-    socialIds: {
-        google: String,
-        apple: String,
-        facebook: String
-    },
-    platforms: [{
-        type: String,
-        enum: ['web', 'ios', 'android', 'macos'],
-    }],
-    lastLoginPlatform: {
-        type: String,
-        enum: ['web', 'ios', 'android', 'macos']
-    },
-    deviceTokens: [{
-        platform: {
-            type: String,
-            enum: ['ios', 'android', 'web']
-        },
-        token: String,
-        lastUsed: Date
-    }],
-
-    stripeCustomerId: String,
+   
     firstname: {
         type: String,
-        required: [false, "First name is required"],
+        required: false,
         maxLength: [30, "First name cannot exceed 30 characters"],
         minLength: [4, "First name must be at least 4 characters"],
         trim: true
     },
-    middlename: {
-        type: String,
-        required: false,
-        maxLength: [30, "Middle name cannot exceed 30 characters"],
-        minLength: [4, "Middle name must be at least 4 characters"],
-        trim: true
-    },
+  
     lastname: {
         type: String,
-        required: [false, "Last name is required"],
+        required: false,
         maxLength: [30, "Last name cannot exceed 30 characters"],
         minLength: [4, "Last name must be at least 4 characters"],
         trim: true
@@ -68,12 +35,8 @@ const UserSchema = new mongoose.Schema({
         required: function() {
             return this.authProvider === 'local';
         },
-        minLength: [8, "Password must be at least 8 characters"],
-        // select: false
-    },
-    dateofbirth: {
-        type: Date,
-        required: false
+        
+        
     },
     gender: {
         type: String,
@@ -82,28 +45,28 @@ const UserSchema = new mongoose.Schema({
     },
     city: {
         type: String,
-        required: [false, "City is required"]
+        required: false
     },
    state: {
         type: String,
-        required: [false, "State is required"]
+        required: false
     },
     country: {
         type: String,
-        required: [false, "Country is required"]
+        required: false
     },
     phoneCode: {
         type: Number,
-        required: [false, "Phone number is required"],
+        required: false
     },
     phoneNumber: {
         type: String,
-        required: [false, "Phone number is required"],
+        required: false
     },
     usertype: {
         type: String,
         enum: ["customer", "serviceprovider","admin"],
-        required: [false, "User type is required"]
+        required: [true, "User type is required"]
     },
     avatar: {
         user_id: {
