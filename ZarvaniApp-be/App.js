@@ -9,6 +9,7 @@ const documentUpload=require('./Route/DocumentRoute')
 const adminVerify=require("./Route/AdminRouter")
 const subscribe=require("./Route/subscriberRoute")
 const location=require("./Route/locationRoute")
+const order=require("./Route/OrderRouter")
 
 app.use(express.json());
 app.use(cookieParser());
@@ -26,6 +27,7 @@ app.use("/api/v1", documentUpload);
 app.use("/api/v1", adminVerify);
 app.use("/api/v1", subscribe);
 app.use("/api/v1", location);
+app.use("/api/v1", order);
 app.use(Middleware);
 
 module.exports = app;

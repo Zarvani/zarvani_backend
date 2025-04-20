@@ -158,117 +158,8 @@ const loginWithGoogle = async (req, res) => {
     }
 };
 
-// Platform-specific token verification
-async function verifyTokenByPlatform(platform, authData) {
-    const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
-    switch (platform) {
-        case 'web':
-        case 'macos':
-            try {
-                const tokenInfo = await client.getTokenInfo(authData.accessToken);
-                return {
-                    success: true,
-                    email: tokenInfo.email,
-                    name: authData.displayName,
-                    googleId: tokenInfo.sub
-                };
-            } catch (error) {
-                return { success: false, message: "Invalid access token" };
-            }
 
-        case 'ios':
-        case 'android':
-            try {
-                const ticket = await client.verifyIdToken({
-                    idToken: authData.idToken,
-                    audience: platform === 'ios' 
-                        ? process.env.GOOGLE_IOS_CLIENT_ID 
-                        : process.env.GOOGLE_ANDROID_CLIENT_ID
-                });
-                const payload = ticket.getPayload();
-                return {
-                    success: true,
-                    email: payload.email,
-                    name: payload.name,
-                    googleId: payload.sub
-                };
-            } catch (error) {
-                return { success: false, message: "Invalid ID token" };
-            }
-
-        default:
-            return { success: false, message: "Unsupported platform" };
-    }
-}
-
-// Generate additional tokens if needed for specific platforms
-async function generatePlatformTokens(platform, userinfo) {
-    const tokens = {};
-
-    switch (platform) {
-        case 'ios':
-            // Generate any iOS specific tokens
-            tokens.pushToken = await generateApplePushToken(userinfo);
-            break;
-        case 'android':
-            // Generate any Android specific tokens
-            tokens.fcmToken = await generateFirebaseToken(userinfo);
-            break;
-        // Add other platform-specific token generation as needed
-    }
-
-    return tokens;
-}
- 
-  const loginWithFacebook = async (req, res) => {
-    const { accessToken } = req.body;
-
-    if (!accessToken) {
-        return res.status(400).json({
-            success: false,
-            message: "Access token is required",
-        });
-    }
-
-    try {
-       
-        const response = await axios.get(`https://graph.facebook.com/me`, {
-            params: {
-                fields: 'id,first_name,last_name,email', 
-                access_token: accessToken
-            }
-        });
-
-        const data = response.data;
-        if (!data.email) {
-            return res.status(400).json({
-                success: false,
-                message: "Unable to retrieve email from Facebook",
-            });
-        }
-
-        let userinfo = await UserData.findOne({ email: data.email });
-
-        if (!userinfo) {
-            userinfo = new UserData({
-                email: data.email,
-                firstname: data.first_name,
-                lastname: data.last_name,
-                password: "", 
-            });
-            await userinfo.save();
-        }
-        setToken(userinfo, 200, res);
-
-    } catch (error) {
-        console.error("Error in Facebook login:", error.message);
-        return res.status(500).json({
-            success: false,
-            message: "Internal server error in Facebook login API",
-        });
-    }
-};
 
 
 
@@ -328,95 +219,27 @@ const getProfile = async (req, res) => {
     }
 };
 
-const getAllProvider = async (req, res) => {
-    try {
-        const { usertype, _id: userId } = req.user;
-        let userdetail;
-        const { country, state, gender, city,radius, latitude, longitude } = req.query;
 
-        if (usertype === "Customer") {
-            // Get all serviceProvide
-            userdetail = await UserData.find({ usertype: "serviceProvider" });
 
-            // Apply additional filters (country, state, gender, city, etc.)
-            userdetail = applyAdditionalFilters(userdetail, { country, state, gender, city});
 
-            // If radius filter is provided (in km)
-            if (radius && latitude && longitude) {
-                // Filter donors based on location and radius
-                userdetail = await filterWorkerByLocation(userdetail, radius, latitude, longitude);
-            }
-
-        } else {
-            return res.status(403).json({
-                success: false,
-                message: "Unauthorized access.",
-            });
-        }
-
-        const transformedUserDetails = userdetail.map(user => {
-            return {
-                id: user.id,
-                firstname: user.firstname,
-                middlename: user.middlename || '',
-                lastname: user.lastname,
-                gender: user.gender,
-                country: user.country,
-                state: user.state,
-                city: user.city,
-                usertype:user.usertype,
-            };
-        });
-
-        res.status(200).json({
-            success: true,
-            userdetail: transformedUserDetails,
-        });
-    } catch (error) {
-        console.error(error);
-        res.status(400).json({
-            success: false,
-            message: "Unable to access getAllProvider function.",
-        });
-    }
-};
-
-const getAllProviderDetails = async (req, res) => {
-    try {
-        const userId  = req.params.id; 
-        const UserDetails = await UserData.findById(userId)
-        if (!UserDetails) { 
-            return res.status(404).json({
-                 success: false, message: "User not found.", }); 
-                }
-        res.status(200).json({
-            success: true,
-            UserDetails,
-        });
-    } catch (error) {
-        console.error(error);
-        res.status(400).json({
-            success: false,
-            message: "Unable to access getdoner function.",
-        });
-    }
-};
 const updateProfileid = async (req, res) => {
     try {
-        const { firstname, middlename, lastname, dateofbirth, gender,city, state, country,phoneCode,phoneNumber} = req.body;
+        const { firstname,  email,lastname,  gender,city, state, country,phoneCode,phoneNumber,service} = req.body;
 
         const newUserData = {
             firstname,
-            middlename,
+           email,
             lastname,
-            dateofbirth,
             gender,
             city,
             state,
             country,
             phoneCode,
-            phoneNumber 
+            phoneNumber
         };
+        if (req.user.usertype === 'serviceprovider' && service) {
+            newUserData.service = service;
+        }
         const userprofile = await UserData.findByIdAndUpdate(req.user.id, newUserData, {
             new: true,
             runValidators: true, 
@@ -703,9 +526,9 @@ module.exports = {
     Loginuser,
     Logout,
     getProfile,
-    getAllProvider,
+   
     loginWithGoogle,
-    loginWithFacebook,
+   
     updateProfileid,
     updateEmail,
     updateProfilePassword,
@@ -714,5 +537,4 @@ module.exports = {
     uploadProfilePhoto,
     deleteProfilePhoto,
     deleteUser,
-    getAllProviderDetails,
 }

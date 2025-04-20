@@ -11,25 +11,38 @@ const orderSchema = new mongoose.Schema({
     required: true,
     unique: true,
   },
-  planId: {
+  orderStatus: {
     type: String,
-    required: true,
+    enum: ['initiated', 'accepted','in-progress', 'completed', 'cancelled'],
+    default: 'initiated',
   },
-  amount: {
-    type: Number,
-    required: true,
+  orderDate: {
+    type: Date,
+    default: Date.now,
   },
-  currency: {
-    type: String,
-    default: 'INR',
+  service: {
+    id: String,
+    name: String,
+    price: Number,
+    category: String,
   },
-  status: {
-    type: String,
-    enum: ['paid', 'failed'],
-    default:'failed',
+  userData: {
+    name: String,
+    phone: String,
+    email:  String,
+    dateTime: String,
+    city: String,
+    state: String,
+    country: String,
+    pincode: String,
+    area: String,
+    address: String,
+    message: String,  // Add other fields based on your formData structure
   },
-  paymentId: String,
-  signature: String,
+  files: {
+    photos: [String],
+    video: String,
+  }
 }, { timestamps: true });
 
 module.exports = mongoose.model('Order', orderSchema);

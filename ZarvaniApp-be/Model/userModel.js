@@ -3,6 +3,7 @@ const validator = require("validator");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const crypto = require('crypto');
+const { type } = require('os');
 
 
 const UserSchema = new mongoose.Schema({
@@ -40,7 +41,7 @@ const UserSchema = new mongoose.Schema({
     },
     gender: {
         type: String,
-        enum: ["Male", "Female", "Other"],
+        enum: ["male", "female", "other"],
         required: false
     },
     city: {
@@ -67,6 +68,29 @@ const UserSchema = new mongoose.Schema({
         type: String,
         enum: ["customer", "serviceprovider","admin"],
         required: [true, "User type is required"]
+    },
+    service:{
+        type: String,
+        enum: ["plumbing",
+                "electrical",
+                "carpentry",
+                "painting",
+                "cleaning",
+                "gardening",
+                "home-appliance-repair",
+                "computer-repair",
+                "home-renovation",
+                "interior-design",
+                "pest-control",
+                "havc-repair",
+                "salon-services",
+                "beauty-services",
+                "tutoring",
+                "legal-services",
+                "catering",
+                "photography",
+                "event-planning",
+                "other"],
     },
     avatar: {
         user_id: {
