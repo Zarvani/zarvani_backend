@@ -224,36 +224,48 @@ const getProfile = async (req, res) => {
 
 const updateProfileid = async (req, res) => {
     try {
-        const { firstname,  email,lastname,  gender,city, state, country,phoneCode,phoneNumber,service} = req.body;
+        const {
+            firstname, middlename, lastname, dateofbirth, gender,
+            city, state, country, phoneCode, phoneNumber, serviceCategory, email, service
+        } = req.body;
 
+        const user = await UserData.findById(req.user.id);
+
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        // Prepare updated data
         const newUserData = {
             firstname,
-           email,
+            middlename,
             lastname,
+            dateofbirth,
+            email,
             gender,
             city,
             state,
             country,
             phoneCode,
-            phoneNumber
+            phoneNumber,
         };
-        if (req.user.usertype === 'serviceprovider' && service) {
-            newUserData.service = service;
-        }
-        const userprofile = await UserData.findByIdAndUpdate(req.user.id, newUserData, {
-            new: true,
-            runValidators: true, 
-            useFindAndModify: false, 
-        });
 
-        if (!userprofile) {
-            return res.status(404).json({ success: false, message: 'User not found' });
+        // Add additional fields for service providers
+        if (req.user.usertype === 'serviceprovider') {
+            if (service) newUserData.service = service;
+            if (serviceCategory) newUserData.serviceCategory = serviceCategory;
         }
+
+        const updatedUser = await UserData.findByIdAndUpdate(req.user.id, newUserData, {
+            new: true,
+            runValidators: true,
+            useFindAndModify: false,
+        });
 
         res.status(200).json({
             success: true,
             message: 'Profile updated successfully',
-            user: userprofile
+            user: updatedUser
         });
     } catch (error) {
         console.error(error);
@@ -263,6 +275,7 @@ const updateProfileid = async (req, res) => {
         });
     }
 };
+
 const updateEmail = async (req, res) => {
     try {
         const { userId, newEmail } = req.body;

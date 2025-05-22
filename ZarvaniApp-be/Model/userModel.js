@@ -1,4 +1,4 @@
-const mongoose=require('mongoose')
+const mongoose = require('mongoose');
 const validator = require("validator");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
@@ -48,7 +48,7 @@ const UserSchema = new mongoose.Schema({
         type: String,
         required: false
     },
-   state: {
+    state: {
         type: String,
         required: false
     },
@@ -92,6 +92,12 @@ const UserSchema = new mongoose.Schema({
                 "event-planning",
                 "other"],
     },
+    serviceCategory: {
+        type: String,
+        required: function() {
+            return this.usertype === 'serviceprovider';
+        }
+    },
     avatar: {
         user_id: {
             type: String,
@@ -104,25 +110,24 @@ const UserSchema = new mongoose.Schema({
     },
     resetPasswordToken: String,
     resetPasswordExpire: Date
-})
+});
+
 UserSchema.pre("save", async function (next) {
     if (!this.isModified("password")) {
         next();
     }
-    this.password = await bcrypt.hash(this.password, 10)
-})
-// generate jwt tokens and store in cookie
+    this.password = await bcrypt.hash(this.password, 10);
+});
 UserSchema.methods.getJwTToken = function () {
     return jwt.sign({ id: this._id }, process.env.JWT_SECRET, {
         expiresIn: process.env.JWT_EXPIRE
-    })
-}
+    });
+};
 UserSchema.methods.getJwTRefreshToken = function () {
     return jwt.sign({ id: this._id }, process.env.JWT_REFRESH_SECRET, {
         expiresIn: process.env.JWT_REFRESH_EXPIRE 
     });
 };
-// genertaing token for forgate password
 UserSchema.methods.getResetPasswordToken = function () {
     // Generate reset token
     const resetToken = crypto.randomBytes(20).toString("hex");
@@ -159,4 +164,5 @@ UserSchema.methods.updateDeviceToken = function(platform, token) {
         });
     }
 };
+
 module.exports = mongoose.model("Userdata", UserSchema);
