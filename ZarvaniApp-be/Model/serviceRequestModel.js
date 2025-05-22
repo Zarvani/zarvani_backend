@@ -5,7 +5,7 @@ const SERVICE_TYPE_IDS = {
   Plumber: 'SRV-PLMB',
   Carpenter: 'SRV-CARP',
   Mechanic: 'SRV-MECH',
-  'Laundry Worker': 'SRV-LAUN',
+  LaundryWorker: 'SRV-LAUN',
   Housekeeper: 'SRV-HKPR',
   Mover: 'SRV-MOVE',
 };

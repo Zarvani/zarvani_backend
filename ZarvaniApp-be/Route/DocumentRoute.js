@@ -4,18 +4,22 @@ const upload = require('../Utills/multer');
 const { Authentication, AuthorizeRole } = require("../Middleware/Authentication")
 
 const { 
-    uploadServiceProviderDocuments
+    uploadVerificationDocuments
 } = require('../Controller/DocumentController');
 
+router.post('/document/upload/:documentName', 
+    Authentication, 
+    upload.single('file'), 
+    (req, res) => {
+        const documentName = req.params.documentName;
+        uploadVerificationDocuments.upload(documentName)(req, res);
+    }
+);
 
-router.route('/Document/AadharCard')
-    .post(Authentication,  upload.single('file'), uploadServiceProviderDocuments.AadharCard);
-router.route('/Document/drivers-license')
-    .post(Authentication,  upload.single('file'), uploadServiceProviderDocuments.ProfessionalDocument);
-router.route('/Document/PanCard')
-    .post(Authentication,  upload.single('file'), uploadServiceProviderDocuments.PanCard);
-router.route('/getAlldocument/:id')
-    .get(Authentication,  uploadServiceProviderDocuments.getAllUsdecument);
+router.get('/document/all/:id', 
+    Authentication, 
+    uploadVerificationDocuments.getAllDocuments
+);
 
 
     module.exports = router;

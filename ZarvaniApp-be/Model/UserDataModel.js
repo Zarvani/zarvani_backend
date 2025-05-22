@@ -1,26 +1,18 @@
 const mongoose = require("mongoose");
 
-const DocumentSchema = new mongoose.Schema({
+const VerificationDocumentSchema = new mongoose.Schema({
     userId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "Userdata",
         required: true
     },
-    AadharCard: {
+    documentName: {
         type: String,
-        required: [true, "AadharCard is required"]
+        required: [true, "Document name is required"]
     },
-    driversLicense: {
+    documentValue: {
         type: String,
-        required: [false, "driversLicense is required"]
-    },
-    PanCard: {
-        type: String,
-        required: [false, "PanCard is required"]
-    },
-    profession:{
-        type: String,
-        required: [true, "AadharCard is required"]
+        required: [true, "Document value is required"]
     },
     isVerified: {
         type: Boolean,
@@ -29,8 +21,8 @@ const DocumentSchema = new mongoose.Schema({
     },
 });
 
-const ServiceProviderDocument = mongoose.model("ServiceProviderDocument", DocumentSchema);
+const VerificationDocument = mongoose.model("VerificationDocument", VerificationDocumentSchema);
 
 module.exports = {
-    ServiceProviderDocument,
+    VerificationDocument,
 };

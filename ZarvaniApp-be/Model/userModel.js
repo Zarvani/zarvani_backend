@@ -1,9 +1,8 @@
-const mongoose=require('mongoose')
+const mongoose = require('mongoose');
 const validator = require("validator");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const crypto = require('crypto');
-
 
 const UserSchema = new mongoose.Schema({
     authProvider: {
@@ -32,7 +31,6 @@ const UserSchema = new mongoose.Schema({
         token: String,
         lastUsed: Date
     }],
-
     stripeCustomerId: String,
     firstname: {
         type: String,
@@ -84,7 +82,7 @@ const UserSchema = new mongoose.Schema({
         type: String,
         required: [false, "City is required"]
     },
-   state: {
+    state: {
         type: String,
         required: [false, "State is required"]
     },
@@ -102,8 +100,14 @@ const UserSchema = new mongoose.Schema({
     },
     usertype: {
         type: String,
-        enum: ["customer", "serviceprovider","admin"],
+        enum: ["customer", "serviceprovider", "admin"],
         required: [false, "User type is required"]
+    },
+    serviceCategory: {
+        type: String,
+        required: function() {
+            return this.usertype === 'serviceprovider';
+        }
     },
     avatar: {
         user_id: {
@@ -117,25 +121,24 @@ const UserSchema = new mongoose.Schema({
     },
     resetPasswordToken: String,
     resetPasswordExpire: Date
-})
+});
+
 UserSchema.pre("save", async function (next) {
     if (!this.isModified("password")) {
         next();
     }
-    this.password = await bcrypt.hash(this.password, 10)
-})
-// generate jwt tokens and store in cookie
+    this.password = await bcrypt.hash(this.password, 10);
+});
 UserSchema.methods.getJwTToken = function () {
     return jwt.sign({ id: this._id }, process.env.JWT_SECRET, {
         expiresIn: process.env.JWT_EXPIRE
-    })
-}
+    });
+};
 UserSchema.methods.getJwTRefreshToken = function () {
     return jwt.sign({ id: this._id }, process.env.JWT_REFRESH_SECRET, {
         expiresIn: process.env.JWT_REFRESH_EXPIRE 
     });
 };
-// genertaing token for forgate password
 UserSchema.methods.getResetPasswordToken = function () {
     // Generate reset token
     const resetToken = crypto.randomBytes(20).toString("hex");
@@ -172,4 +175,5 @@ UserSchema.methods.updateDeviceToken = function(platform, token) {
         });
     }
 };
+
 module.exports = mongoose.model("Userdata", UserSchema);

@@ -1,18 +1,15 @@
-const { ServiceProviderDocument} = require("../Model/UserDataModel");
-const { uploadDocument,getAllDocument }=require("../Utills/Uploadfile")
+const { VerificationDocument } = require("../Model/UserDataModel");
+const { uploadDocument, getAllDocument } = require("../Utills/Uploadfile");
 
+const uploadVerificationDocuments = {
+    // Use one common function with document name passed dynamically
+    upload: (documentName) => (req, res) => 
+        uploadDocument(req, res, VerificationDocument, documentName),
 
-// United States Document Uploads
-const uploadServiceProviderDocuments = {
-    AadharCard: (req, res) => uploadDocument(req, res, ServiceProviderDocument, "AadharCard"),
-    ProfessionalDocument: (req, res) => uploadDocument(req, res, ServiceProviderDocument, "Professional Document"),
-    PanCard: (req, res) => uploadDocument(req, res, ServiceProviderDocument, "PanCard"),
-    getAllUsdecument:(req,res)=>getAllDocument(req, res, ServiceProviderDocument)
+    getAllDocuments: (req, res) => 
+        getAllDocument(req, res, VerificationDocument)
 };
 
-
-
-
 module.exports = {
-    uploadServiceProviderDocuments,
+    uploadVerificationDocuments,
 };
