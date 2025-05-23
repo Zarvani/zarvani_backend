@@ -3,7 +3,6 @@ const {createUser
     , Loginuser,
     Logout,
     getProfile,
-    getAllProvider,
     loginWithGoogle,
     loginWithFacebook,
     updateProfileid,
@@ -13,7 +12,7 @@ const {createUser
     forgetPassword,
     checkProfileCompletion,uploadProfilePhoto,
     deleteProfilePhoto,
-    getAllProviderDetails,
+    
 }=require("../Controller/Usercontroller");
 const upload = require('../Utills/multer'); 
 

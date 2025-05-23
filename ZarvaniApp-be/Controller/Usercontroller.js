@@ -539,9 +539,7 @@ module.exports = {
     Loginuser,
     Logout,
     getProfile,
-   
     loginWithGoogle,
-   
     updateProfileid,
     updateEmail,
     updateProfilePassword,
