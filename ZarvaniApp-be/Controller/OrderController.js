@@ -1,5 +1,7 @@
 const Order = require('../Model/orderModel');
+const Userdata = require('../Model/userModel'); 
 const { v4: uuidv4 } = require('uuid'); 
+const ServiceProvider=require("../Model/serviceRequestModel")
 
 // Create order (customer creates order - no assignment initially)
 const createOrder = async (req, res) => {
@@ -187,20 +189,51 @@ const updateOrderStatus = async (req, res) => {
             order.completionImages = completionImages;
         }
 
-        // Add provider note if provided
+        // Update or add provider note
         if (note) {
-            order.providerNotes.push(note);
+            // Check if there's already a note from this provider for this status
+            const existingNoteIndex = order.providerNotes.findIndex(
+                existingNote => existingNote.status === status && existingNote.providerId === providerId
+            );
+            
+            if (existingNoteIndex !== -1) {
+                // Update existing note
+                order.providerNotes[existingNoteIndex].note = note;
+                order.providerNotes[existingNoteIndex].timestamp = new Date();
+            } else {
+                // Add new note only if none exists for this status
+                order.providerNotes.push({
+                    note: note,
+                    status: status,
+                    providerId: providerId,
+                    timestamp: new Date()
+                });
+            }
         }
 
-        // Add to status history manually if needed
-        order.statusHistory.push({
-            status: status,
-            timestamp: new Date(),
-            note: note || `Order status updated to ${status}`,
-            updatedBy: providerId,
-            updatedByModel: 'ServiceProvider',
-            images: completionImages || []
-        });
+        // Update or add to status history
+        const existingStatusIndex = order.statusHistory.findIndex(
+            historyItem => historyItem.status === status && historyItem.updatedBy === providerId
+        );
+
+        if (existingStatusIndex !== -1) {
+            // Update existing status history entry
+            order.statusHistory[existingStatusIndex].timestamp = new Date();
+            order.statusHistory[existingStatusIndex].note = note || `Order status updated to ${status}`;
+            if (completionImages) {
+                order.statusHistory[existingStatusIndex].images = completionImages;
+            }
+        } else {
+            // Add new status history entry only if none exists for this status and provider
+            order.statusHistory.push({
+                status: status,
+                timestamp: new Date(),
+                note: note || `Order status updated to ${status}`,
+                updatedBy: providerId,
+                updatedByModel: 'ServiceProvider',
+                images: completionImages || []
+            });
+        }
 
         await order.save();
 
@@ -219,7 +252,6 @@ const updateOrderStatus = async (req, res) => {
 const getMyOrders = async (req, res) => {
     try {
         const providerId = req.user.id;
-        
         if (!providerId) {
             return res.status(400).json({ message: 'Service provider authentication required' });
         }
@@ -279,38 +311,62 @@ const getUserOrders = async (req, res) => {
         const userId = req.user.id;
         
         if (!userId) {
-            return res.status(400).json({ message: 'User authentication required' });
+            return res.status(400).json({ 
+                message: 'User authentication required',
+                success: false 
+            });
         }
 
+        // Parse query parameters with defaults
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const status = req.query.status;
         const sortBy = req.query.sortBy || 'createdAt';
         const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
-
+       
+        // Build query object
         const query = {
             userId: userId
         };
 
-        if (status) {
+        // Add status filter if provided
+        if (status && status.trim() !== '') {
             query.orderStatus = status;
         }
-
+     
+        // Calculate pagination
         const skip = (page - 1) * limit;
+        
+        // Build sort object
         const sort = {};
         sort[sortBy] = sortOrder;
 
+        // Fetch orders with population
         const orders = await Order.find(query)
             .sort(sort)
             .skip(skip)
             .limit(limit)
-            .populate('serviceProviderId', 'name email phone businessName')
+            .populate({
+                path: 'serviceProviderId',
+                model: 'Userdata',
+                select: 'name email phone businessName profileImage',
+                options: { strictPopulate: false }
+            })
+            .populate({
+                path: 'serviceId',
+                model: 'Service',
+                select: 'serviceDescription serviceManType serviceId files',
+                options: { strictPopulate: false }
+            })
             .lean();
 
+        // Get total count for pagination
         const totalOrders = await Order.countDocuments(query);
         const totalPages = Math.ceil(totalOrders / limit);
 
+        // Return success response
         res.status(200).json({
+            success: true,
             message: 'Your orders retrieved successfully',
             data: {
                 orders,
@@ -320,30 +376,34 @@ const getUserOrders = async (req, res) => {
                     totalOrders,
                     hasNext: page < totalPages,
                     hasPrev: page > 1,
-                    limit
+                    limit,
+                    skip
                 }
             }
         });
 
     } catch (error) {
         console.error('Error fetching user orders:', error);
-        res.status(500).json({ message: 'Server error while fetching your orders' });
+            res.status(500).json({ 
+            success: false,
+            message: 'Server error while fetching your orders',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
     }
 };
 
 // Get order details with full status history
-const getOrderDetails = async (req, res) => {
+const getBatchOrderDetails = async (req, res) => {
     try {
         const { orderId } = req.params;
         const userId = req.user.id;
-
         const order = await Order.findOne({ orderId: orderId })
             .populate('userId', 'name email phone')
             .populate('serviceProviderId', 'name email phone businessName')
             .lean();
 
         if (!order) {
-            return res.status(404).json({ message: 'Order not found' });
+            return res.status(404).json({ message: 'Order not found88' });
         }
 
         // Check if user has permission to view this order
@@ -428,7 +488,7 @@ module.exports = {
     updateOrderStatus,
     getMyOrders,
     getUserOrders,
-    getOrderDetails,
+    getBatchOrderDetails,
     getServiceCategories,
     addProviderNote
 };
