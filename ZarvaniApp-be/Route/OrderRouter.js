@@ -6,7 +6,7 @@ const { createOrder,
     updateOrderStatus,
     getMyOrders,
     getUserOrders,
-    getOrderDetails,
+    getBatchOrderDetails,
     getServiceCategories,
     addProviderNote } = require('../Controller/OrderController');
 const { Authentication, AuthorizeRole } = require("../Middleware/Authentication")
@@ -14,7 +14,7 @@ const { Authentication, AuthorizeRole } = require("../Middleware/Authentication"
 // CUSTOMER ROUTES
 router.post('/create-order', Authentication, AuthorizeRole('customer'), createOrder);
 router.get('/orders/my-orders', Authentication, AuthorizeRole('customer'), getUserOrders);
-router.get('/orders/:orderId', Authentication, getOrderDetails);
+router.get('/ordersDetails/:orderId', Authentication, getBatchOrderDetails);
 
 // SERVICE PROVIDER ROUTES
 router.get('/orders/available/:category', Authentication, AuthorizeRole('serviceprovider'), getAvailableOrdersByCategory);
