@@ -82,7 +82,7 @@ const getAllServiceProviders = async (req, res) => {
 // Get all users (excluding service providers)
 const getAllUsers = async (req, res) => {
     try {
-        const users = await UserData.find({ usertype: { $ne: 'serviceprovider' } })
+        const users = await UserData.find({ usertype: { $nin: ['serviceprovider', 'admin', 'Admin'] }})
             .select('-password') // Exclude password field
             .sort({ createdAt: -1 }); // Sort by newest first
 
@@ -131,7 +131,6 @@ const getUserById = async (req, res) => {
         res.status(200).json({
             success: true,
             user,
-            userType: user.usertype === 'serviceprovider' ? 'Service Provider' : 'Regular User'
         });
     } catch (error) {
         console.error("Error fetching user by ID:", error.message);
