@@ -8,8 +8,20 @@ const { Service } =require("../models/Service")
 const { Product } =require("../models/Product")
 const ResponseHandler = require('../utils/responseHandler');
 const EmailService = require('../services/emailService');
+const { Admin } = require('../models/Admin');
+const jwt = require('jsonwebtoken');
 const logger = require('../utils/logger');
 
+exports.createAdmin = async (req, res) => {
+  try {
+    const { name, email, password, role, permissions } = req.body;
+    const admin = new Admin({ name, email, password, role, permissions });
+    await admin.save();
+    res.status(201).json({ message: 'Admin created successfully', admin });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+};
 // Get All Users
 exports.getAllUsers = async (req, res) => {
   try {

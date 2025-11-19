@@ -35,11 +35,11 @@ const shopSchema = new mongoose.Schema({
     default: 'shop'
   },
   address: {
-    addressLine1: { type: String, required: true },
+    addressLine1: String,
     addressLine2: String,
-    city: { type: String, required: true },
-    state: { type: String, required: true },
-    pincode: { type: String, required: true },
+    city: String,
+    state: String,
+    pincode: String,
     location: {
       type: {
         type: String,
@@ -140,5 +140,19 @@ shopSchema.methods.generateOTP = function() {
   };
   return otp;
 };
-
+shopSchema.methods.verifyOTP = function(enteredOTP) {
+  if (!this.otp || !this.otp.code) {
+    return false;
+  }
+  
+  if (this.otp.expiresAt < new Date()) {
+    return false;
+  }
+  
+  if (this.otp.attempts >= 5) {
+    return false;
+  }
+  
+  return this.otp.code === enteredOTP;
+};
 module.exports = {Shop: mongoose.model('Shop', shopSchema)};

@@ -11,7 +11,7 @@ router.post('/', authorize('user'), orderController.createOrder);
 router.get('/:orderId/tracking', authorize('user'), orderController.getOrderTracking);
 router.put('/:orderId/cancel', authorize('user'), orderController.cancelOrder);
 
-// Shop routes
+// Shop routes  
 router.post('/:orderId/accept', authorize('shop'), orderController.acceptOrder);
 router.post('/:orderId/reject', authorize('shop'), orderController.rejectOrder);
 router.put('/:orderId/status', authorize('shop'), orderController.updateOrderStatus);

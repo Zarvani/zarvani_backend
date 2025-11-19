@@ -8,6 +8,8 @@ router.use(protect);
 router.use(authorize('admin', 'superadmin'));
 
 // User Management
+router.get('/createAdmin', adminController.createAdmin);
+
 router.get('/users', adminController.getAllUsers);
 router.get('/users/:id', adminController.getUserDetails);
 router.put('/users/:id/status', adminController.updateUserStatus);
