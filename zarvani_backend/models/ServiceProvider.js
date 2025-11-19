@@ -91,7 +91,7 @@ const serviceProviderSchema = new mongoose.Schema({
     }
   },
   serviceCategories: [{
-    type: String,
+    type: [String],
     enum: [
       "plumbing",
       "electrical",
