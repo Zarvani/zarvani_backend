@@ -3,6 +3,7 @@ const User = require('../models/User');
 const Booking =require("../models/Booking")
 const { Review } = require('../models/Review');
 const ResponseHandler = require('../utils/responseHandler');
+const {Service} =require('../models/Service');
 const { deleteFromCloudinary } = require('../middleware/uploadMiddleware');
 const GeoService = require('../services/geoService');
 
@@ -133,5 +134,75 @@ exports.submitReview = async (req, res) => {
     ResponseHandler.success(res, { review }, 'Review submitted successfully', 201);
   } catch (error) {
     ResponseHandler.error(res, error.message, 500);
+  }
+};
+exports.getServices = async (req, res) => {
+  try {
+    let { page = 1, limit = 10, sortBy = "createdAt", order = "desc" } = req.query;
+
+    page = Number(page);
+    limit = Number(limit);
+    const sortOrder = order === "asc" ? 1 : -1;
+
+    const services = await Service.find()
+      .sort({ [sortBy]: sortOrder })
+      .skip((page - 1) * limit)
+      .limit(limit);
+
+    const total = await Service.countDocuments();
+
+    return res.status(200).json({
+      success: true,
+      message: "Services fetched successfully",
+      page,
+      limit,
+      total,
+      data: services
+    });
+
+  } catch (error) {
+    console.error("Error fetching services:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Something went wrong",
+      error: error.message
+    });
+  }
+};
+exports.getServicesByCategory = async (req, res) => {
+  try {
+    const { category } = req.query;
+
+    // If category not provided → return 400
+    if (!category) {
+      return res.status(400).json({
+        success: false,
+        message: "Category is required"
+      });
+    }
+
+    // Find services by category
+    const services = await Service.find({ category })
+      .select("-provider -requiredProducts -__v") // remove provider, products if not needed publicly
+      .lean();
+
+    if (services.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "No services found for this category"
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      category,
+      services
+    });
+  } catch (error) {
+    console.error("Error fetching services:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error"
+    });
   }
 };
