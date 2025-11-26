@@ -3,9 +3,10 @@ const crypto = require('crypto');
 const User = require('../models/User');
 const ServiceProvider = require('../models/ServiceProvider');
 const { Shop } = require('../models/Shop');
-const Admin= require("../models/Admin")
+const { Admin } = require('../models/Admin');
 const EmailService = require('../services/emailService');
 const ResponseHandler = require('../utils/responseHandler');
+const getAddressFromCoords = require('../utils/getAddressFromCoords')
 const logger = require('../utils/logger');
 const redisClient =require("../config/passport")
 // Generate JWT Token
@@ -112,27 +113,34 @@ exports.signup = async (req, res) => {
       phone,
       password,
       role = "user",
-
-      // provider fields
-      experience,
-      certifications,
-      documents,
-      serviceCategories,
-      specializations,
-      portfolio,
-      workingHours,
-      address,
-      availability,
-      bankDetails,
-
-      // shop fields
-      ownerName,
-      gstNumber,
-      categories
+      coordinates
     } = req.body;
 
     // --------------------------------------
-    // 1️⃣ SELECT MODEL BASED ON ROLE
+    // 1️⃣ PARSE JSON STRINGS FROM FORMDATA
+    // --------------------------------------
+    let address, experience, documents, serviceCategories, specializations;
+    let ownerName, gstNumber, categories;
+
+    try {
+      // Parse JSON fields
+      if (req.body.address) address = JSON.parse(req.body.address);
+      if (req.body.experience) experience = JSON.parse(req.body.experience);
+      if (req.body.documents) documents = JSON.parse(req.body.documents);
+      if (req.body.serviceCategories) serviceCategories = JSON.parse(req.body.serviceCategories);
+      if (req.body.specializations) specializations = JSON.parse(req.body.specializations);
+      if (req.body.categories) categories = JSON.parse(req.body.categories);
+    } catch (parseErr) {
+      logger.error(`JSON Parse Error: ${parseErr.message}`);
+      return ResponseHandler.error(res, "Invalid JSON data in request", 400);
+    }
+
+    // Shop fields (plain text, no parsing needed)
+    if (req.body.ownerName) ownerName = req.body.ownerName;
+    if (req.body.gstNumber) gstNumber = req.body.gstNumber;
+
+    // --------------------------------------
+    // 2️⃣ SELECT MODEL BASED ON ROLE
     // --------------------------------------
     let Model;
     if (role === "user") Model = User;
@@ -140,9 +148,8 @@ exports.signup = async (req, res) => {
     else if (role === "shop") Model = Shop;
     else return ResponseHandler.error(res, "Invalid role", 400);
 
-
     // --------------------------------------
-    // 2️⃣ CHECK IF USER ALREADY EXIST
+    // 3️⃣ CHECK IF USER ALREADY EXISTS
     // --------------------------------------
     const existing = await Model.findOne({
       $or: [
@@ -159,78 +166,168 @@ exports.signup = async (req, res) => {
       );
     }
 
-
     // --------------------------------------
-    // 3️⃣ PREPARE DATA
+    // 4️⃣ PREPARE BASE USER DATA
     // --------------------------------------
     const userData = {
       name,
       phone,
-      email,
       password,
       role,
+      phoneVerified: true, // Since OTP was verified
     };
 
+    if (email) userData.email = email;
+    if (role === "user") {
+      if (coordinates && coordinates.latitude && coordinates.longitude) {
+        const autoAddress = await getAddressFromCoords(
+          coordinates.latitude,
+          coordinates.longitude
+        );
+
+        if (autoAddress) {
+          userData.addresses = [autoAddress];  // Save inside addresses[]
+        }
+      }
+    }
+    // --------------------------------------
+    // 5️⃣ PROVIDER-SPECIFIC DATA
+    // --------------------------------------
     if (role === "provider") {
-      if (experience) userData.experience = experience;
-      if (certifications) userData.certifications = certifications;
-      if (documents) userData.documents = documents;
-      if (serviceCategories) userData.serviceCategories = serviceCategories;
-      if (specializations) userData.specializations = specializations;
-      if (portfolio) userData.portfolio = portfolio;
-      if (workingHours) userData.workingHours = workingHours;
-      if (address) userData.address = address;
-      if (availability) userData.availability = availability;
-      if (bankDetails) userData.bankDetails = bankDetails;
+      // Service Categories
+      if (serviceCategories && Array.isArray(serviceCategories)) {
+        userData.serviceCategories = serviceCategories;
+      }
+
+      // Specializations
+      if (specializations && Array.isArray(specializations)) {
+        userData.specializations = specializations;
+      }
+
+      // Experience
+      if (experience) {
+        userData.experience = {
+          years: parseInt(experience.years) || 0,
+          description: experience.description || ""
+        };
+      }
+
+      // Address with Location
+      if (address) {
+        userData.address = {
+          addressLine1: address.addressLine1,
+          addressLine2: address.addressLine2 || "",
+          city: address.city,
+          state: address.state,
+          country:address.country,
+          pincode: address.pincode,
+          location: {
+            type: "Point",
+            coordinates: address.location?.coordinates || [0, 0]
+          }
+        };
+      }
+
+      // Documents with uploaded file
+      if (documents && req.files && req.files.idProof) {
+        const idProofFile = req.files.idProof[0];
+        userData.documents = {
+          idProof: {
+            type: documents.idProof?.type || "",
+            number: documents.idProof?.number || "",
+            document: {
+              url: idProofFile.path, // Cloudinary URL
+              publicId: idProofFile.filename // Cloudinary public ID
+            },
+            verified: false
+          }
+        };
+      }
     }
 
+    // --------------------------------------
+    // 6️⃣ SHOP-SPECIFIC DATA
+    // --------------------------------------
     if (role === "shop") {
       userData.ownerName = ownerName;
+
       if (gstNumber) userData.gstNumber = gstNumber;
-      if (categories) userData.categories = categories;
-      if (address) userData.address = address;
-      if (bankDetails) userData.bankDetails = bankDetails;
+
+      // Categories
+      if (categories && Array.isArray(categories)) {
+        userData.categories = categories;
+      }
+
+      // Address with Location
+      if (address) {
+        userData.address = {
+          addressLine1: address.addressLine1,
+          addressLine2: address.addressLine2 || "",
+          city: address.city,
+          state: address.state,
+          country:address.country,
+          pincode: address.pincode,
+          location: {
+            type: "Point",
+            coordinates: address.location?.coordinates || [0, 0]
+          }
+        };
+      }
+
+      // Documents
+      userData.documents = {};
+
+      if (req.files && req.files.businessLicense) {
+        const licenseFile = req.files.businessLicense[0];
+        userData.documents.businessLicense = {
+          url: licenseFile.path,
+          publicId: licenseFile.filename,
+          verified: false
+        };
+      }
+
+      if (req.files && req.files.gstCertificate) {
+        const gstFile = req.files.gstCertificate[0];
+        userData.documents.gstCertificate = {
+          url: gstFile.path,
+          publicId: gstFile.filename,
+          verified: false
+        };
+      }
     }
 
-
     // --------------------------------------
-    // 4️⃣ GENERATE OTP BEFORE DB WRITE
+    // 7️⃣ CREATE USER IN DATABASE
     // --------------------------------------
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const otpExpiry = Date.now() + 10 * 60 * 1000; // 10 mins
-
-    userData.otp = otp;
-    userData.otpExpiry = otpExpiry;
     const user = await Model.create(userData);
 
+    // Generate token
+    const token = generateToken(user._id, role);
 
-    // Remove private fields
-    user.password = undefined;
-    user.otp = undefined;
-    user.otpExpiry = undefined;
-
+    // Remove sensitive fields
+    const userObj = user.toObject();
+    delete userObj.password;
 
     // --------------------------------------
-    // 7️⃣ SEND RESPONSE IMMEDIATELY ⭐ FAST ⭐
+    // 8️⃣ SEND RESPONSE
     // --------------------------------------
     ResponseHandler.success(
       res,
       {
-        user,
-        message: "Signup successful. OTP sent."
+        user: userObj,
+        token,
+        message: "Registration successful"
       },
       "Signup success",
       201
     );
 
-
     // --------------------------------------
-    // 8️⃣ BACKGROUND TASK — SEND EMAILS
+    // 9️⃣ BACKGROUND TASK — SEND EMAILS
     // --------------------------------------
     setImmediate(async () => {
       try {
         if (email) {
-          await EmailService.sendOTP(email, otp, name);
           await EmailService.sendWelcomeEmail(email, name, role);
         }
       } catch (err) {
@@ -238,12 +335,33 @@ exports.signup = async (req, res) => {
       }
     });
 
-
   } catch (err) {
     logger.error(`Signup error: ${err.message}`);
+    
+    // Delete uploaded files if registration fails
+    if (req.files) {
+      try {
+        const { deleteFromCloudinary } = require('../middleware/uploadMiddleware');
+        
+        if (req.files.idProof && req.files.idProof[0]) {
+          await deleteFromCloudinary(req.files.idProof[0].filename);
+        }
+        if (req.files.businessLicense && req.files.businessLicense[0]) {
+          await deleteFromCloudinary(req.files.businessLicense[0].filename);
+        }
+        if (req.files.gstCertificate && req.files.gstCertificate[0]) {
+          await deleteFromCloudinary(req.files.gstCertificate[0].filename);
+        }
+      } catch (deleteErr) {
+        logger.error(`Error deleting files: ${deleteErr.message}`);
+      }
+    }
+    
     return ResponseHandler.error(res, err.message, 500);
   }
 };
+
+
 
 exports.verifySignupOTP = async (req, res) => {
   try {
@@ -374,7 +492,16 @@ exports.loginWithPassword = async (req, res) => {
       user = await Shop.findOne(query).select("+password");
       if (user) role = "shop";
     }
-
+   if (!user) {
+      user = await Admin.findOne(query).select("+password");
+     if (user) {
+        if (user.role === "admin" || user.role === "superadmin") {
+          role = user.role; // assign actual admin/superadmin role
+        } else {
+          return ResponseHandler.error(res, "Unauthorized admin role", 403);
+        }
+      }
+    }
     if (!user) {
       return ResponseHandler.error(res, "User not found", 404);
     }
@@ -724,5 +851,88 @@ exports.getCurrentUser = async (req, res) => {
   } catch (error) {
     logger.error(`Get current user error: ${error.message}`);
     ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+exports.updateLocation = async (req, res) => {
+  try {
+    const userId = req.user.id; // from auth middleware
+    const { coordinates } = req.body;
+
+    if (!coordinates || !Array.isArray(coordinates) || coordinates.length !== 2) {
+      return res.status(400).json({
+        success: false,
+        message: "Coordinates must be [longitude, latitude]"
+      });
+    }
+
+    // 1️⃣ Try to update USER location (NO ADDRESS CHECK)
+    let user = await User.findById(userId);
+
+    if (user) {
+      // If no addresses array → create one automatically
+      if (!user.addresses || user.addresses.length === 0) {
+        user.addresses = [
+          {
+            isDefault: true,
+            location: {
+              type: "Point",
+              coordinates: coordinates
+            }
+          }
+        ];
+      } else {
+        // update only coordinates for first/default address
+        const address = user.addresses.find(a => a.isDefault) || user.addresses[0];
+        address.location.coordinates = coordinates;
+      }
+
+      await user.save();
+
+      return res.status(200).json({
+        success: true,
+        message: "User location updated successfully",
+        location: user.addresses.find(a => a.isDefault)?.location || user.addresses[0].location
+      });
+    }
+
+    // 2️⃣ Try to update SERVICE PROVIDER location
+    let provider = await ServiceProvider.findById(userId);
+
+    if (!provider) {
+      return res.status(404).json({
+        success: false,
+        message: "User / Provider not found"
+      });
+    }
+
+    // If provider address missing → auto create
+    if (!provider.address) {
+      provider.address = {};
+    }
+    if (!provider.address.location) {
+      provider.address.location = {
+        type: "Point",
+        coordinates: coordinates
+      };
+    } else {
+      provider.address.location.coordinates = coordinates;
+    }
+
+    await provider.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Provider location updated successfully",
+      location: provider.address.location
+    });
+
+  } catch (error) {
+    console.error("Location update error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+      error: error.message
+    });
   }
 };

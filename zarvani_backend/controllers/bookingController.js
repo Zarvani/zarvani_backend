@@ -9,6 +9,7 @@ const PushNotificationService = require('../services/pushNotification');
 const logger = require('../utils/logger');
 const { Service } =require("../models/Service")
 const { Notification } = require("../models/Notification")
+const mongoose = require("mongoose");
 // Create Booking with Provider Search
 exports.createBooking = async (req, res) => {
   try {
@@ -774,7 +775,7 @@ exports.getProviderStats = async (req, res) => {
     const providerId = req.user._id;
     
     const stats = await Booking.aggregate([
-      { $match: { provider: mongoose.Types.ObjectId(providerId) } },
+      { $match: { provider: new mongoose.Types.ObjectId(providerId) } },
       {
         $group: {
           _id: '$status',
@@ -795,7 +796,7 @@ exports.getProviderStats = async (req, res) => {
     const todayEarnings = await Booking.aggregate([
       {
         $match: {
-          provider: mongoose.Types.ObjectId(providerId),
+          provider: new mongoose.Types.ObjectId(providerId),
           status: 'completed',
           completedAt: { $gte: todayStart }
         }
@@ -811,7 +812,7 @@ exports.getProviderStats = async (req, res) => {
     const totalEarnings = await Booking.aggregate([
       {
         $match: {
-          provider: mongoose.Types.ObjectId(providerId),
+          provider: new mongoose.Types.ObjectId(providerId),
           status: 'completed'
         }
       },

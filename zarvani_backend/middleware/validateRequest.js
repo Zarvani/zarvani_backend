@@ -43,7 +43,7 @@ exports.schemas = {
   signup: Joi.object({
     name: Joi.string().min(2).max(50).required(),
     email: Joi.string().email().optional(),
-    phone: Joi.string().pattern(/^[6-9]\d{9}$/).required(),
+    phone: Joi.string().pattern(/^\+\d{7,15}$/).required(),
     password: Joi.string().min(6).optional(),
     role: Joi.string().valid('user', 'provider', 'shop').default('user')
   }),

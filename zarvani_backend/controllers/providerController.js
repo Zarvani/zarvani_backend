@@ -1,7 +1,7 @@
 // ============= controllers/providerController.js =============
 const ServiceProvider = require('../models/ServiceProvider');
 const { Service } =require("../models/Service")
-
+const ResponseHandler = require('../utils/responseHandler');
 // Get Provider Profile
 exports.getProfile = async (req, res) => {
   try {

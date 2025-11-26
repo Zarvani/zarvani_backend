@@ -11,6 +11,7 @@ const EmailService = require('../services/emailService');
 const { Admin } = require('../models/Admin');
 const jwt = require('jsonwebtoken');
 const logger = require('../utils/logger');
+const mongoose = require("mongoose");
 
 exports.createAdmin = async (req, res) => {
   try {
@@ -634,46 +635,32 @@ exports.getBookingDetails = async (req, res) => {
 };
 exports.addService = async (req, res) => {
   try {
-    const {
-      provider,
-      title,
-      description,
-      category,
-      subcategory,
-      images,
-      pricing,
-      duration,
-      location,
-      serviceType,
-      tags,
-      requiredProducts
-    } = req.body;
-
-    // Verify provider exists and is approved
-    const providerExists = await ServiceProvider.findOne({
-      _id: provider,
-      verificationStatus: 'approved',
-      isActive: true
-    });
-
-    if (!providerExists) {
-      return ResponseHandler.error(res, 'Provider not found or not approved', 404);
+    // Parse the service data from 'data' field
+    const serviceData = JSON.parse(req.body.data);
+    
+    // Handle uploaded images from multer
+    const uploadedImages = [];
+    if (req.files && req.files.length > 0) {
+      req.files.forEach(file => {
+        uploadedImages.push({
+          url: file.path, // Cloudinary URL
+          publicId: file.filename // Cloudinary public ID
+        });
+      });
     }
-
+    
+    // Combine uploaded images with service data
     const service = await Service.create({
-      provider,
-      title,
-      description,
-      category,
-      subcategory,
-      images,
-      pricing,
-      duration,
-      location,
-      serviceType,
-      isActive: true,
-      tags,
-      requiredProducts
+      title: serviceData.title,
+      description: serviceData.description,
+      category: serviceData.category,
+      subcategory: serviceData.subcategory,
+      images: uploadedImages, // Only Cloudinary URLs
+      pricing: serviceData.pricing,
+      duration: serviceData.duration,
+      serviceType: serviceData.serviceType,
+      tags: serviceData.tags,
+      isActive: serviceData.isActive
     });
 
     ResponseHandler.success(res, { service }, 'Service created successfully', 201);
@@ -682,6 +669,7 @@ exports.addService = async (req, res) => {
     ResponseHandler.error(res, error.message, 500);
   }
 };
+
 
 // Get All Services
 exports.getServices = async (req, res) => {
@@ -738,7 +726,7 @@ exports.getServiceDetails = async (req, res) => {
 
     // Get booking statistics for this service
     const bookingStats = await Booking.aggregate([
-      { $match: { service: mongoose.Types.ObjectId(id) } },
+      { $match: { service: new mongoose.Types.ObjectId(id) } },
       {
         $group: {
           _id: '$status',
@@ -760,7 +748,7 @@ exports.getServiceDetails = async (req, res) => {
       { $unwind: '$bookingDetails' },
       {
         $match: {
-          'bookingDetails.service': mongoose.Types.ObjectId(id),
+          'bookingDetails.service': new mongoose.Types.ObjectId(id),
           status: 'success'
         }
       },
@@ -788,30 +776,62 @@ exports.getServiceDetails = async (req, res) => {
 exports.updateService = async (req, res) => {
   try {
     const { id } = req.params;
-    const updateData = req.body;
-
-    // If provider is being changed, verify the new provider
-    if (updateData.provider) {
-      const providerExists = await ServiceProvider.findOne({
-        _id: updateData.provider,
-        verificationStatus: 'approved',
-        isActive: true
-      });
-
-      if (!providerExists) {
-        return ResponseHandler.error(res, 'Provider not found or not approved', 404);
-      }
-    }
-
-    const service = await Service.findByIdAndUpdate(
-      id,
-      updateData,
-      { new: true, runValidators: true }
-    ).populate('provider', 'name email phone profilePicture');
-
-    if (!service) {
+    
+    // Parse the service data from 'data' field
+    const serviceData = JSON.parse(req.body.data);
+    
+    // Get existing service
+    const existingService = await Service.findById(id);
+    if (!existingService) {
       return ResponseHandler.error(res, 'Service not found', 404);
     }
+    
+    // Handle new uploaded images
+    const newUploadedImages = [];
+    if (req.files && req.files.length > 0) {
+      req.files.forEach(file => {
+        newUploadedImages.push({
+          url: file.path, // Cloudinary URL
+          publicId: file.filename // Cloudinary public ID
+        });
+      });
+    }
+    
+    // Combine existing images (from serviceData.existingImages) with new uploads
+    const finalImages = [
+      ...(serviceData.existingImages || []), // Keep old images that weren't deleted
+      ...newUploadedImages // Add new uploaded images
+    ];
+    
+    // Find images that were removed (to delete from Cloudinary)
+    const removedImages = existingService.images.filter(oldImg => 
+      !finalImages.some(newImg => newImg.publicId === oldImg.publicId)
+    );
+    
+    // Delete removed images from Cloudinary
+    for (const img of removedImages) {
+      if (img.publicId) {
+        await deleteFromCloudinary(img.publicId);
+      }
+    }
+    
+    // Update service
+    const service = await Service.findByIdAndUpdate(
+      id,
+      {
+        title: serviceData.title,
+        description: serviceData.description,
+        category: serviceData.category,
+        subcategory: serviceData.subcategory,
+        images: finalImages, // Updated images array
+        pricing: serviceData.pricing,
+        duration: serviceData.duration,
+        serviceType: serviceData.serviceType,
+        tags: serviceData.tags,
+        isActive: serviceData.isActive
+      },
+      { new: true, runValidators: true }
+    )
 
     ResponseHandler.success(res, { service }, 'Service updated successfully');
   } catch (error) {
@@ -819,7 +839,6 @@ exports.updateService = async (req, res) => {
     ResponseHandler.error(res, error.message, 500);
   }
 };
-
 // Delete Service
 exports.deleteService = async (req, res) => {
   try {
@@ -838,9 +857,8 @@ exports.deleteService = async (req, res) => {
         400
       );
     }
-
     const service = await Service.findByIdAndDelete(id);
-
+   
     if (!service) {
       return ResponseHandler.error(res, 'Service not found', 404);
     }
@@ -950,5 +968,95 @@ exports.getServiceCategories = async (req, res) => {
   } catch (error) {
     logger.error(`Get service categories error: ${error.message}`);
     ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+exports.getAllTransactions = async (req, res) => {
+  try {
+    // Check Access
+    if (!["admin", "superadmin"].includes(req.user.role)) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Only admin or superadmin can view transactions."
+      });
+    }
+
+    // Filters
+    const { 
+      paymentMethod, 
+      status, 
+      provider, 
+      shop, 
+      user, 
+      startDate, 
+      endDate,
+      search
+    } = req.query;
+
+    const filter = {};
+
+    // Filter by payment method
+    if (paymentMethod) filter.paymentMethod = paymentMethod;
+
+    // Filter by payment status
+    if (status) filter.status = status;
+
+    // Filter by provider
+    if (provider) filter.provider = mongoose.Types.ObjectId(provider);
+
+    // Filter by shop
+    if (shop) filter.shop = mongoose.Types.ObjectId(shop);
+
+    // Filter by user
+    if (user) filter.user = mongoose.Types.ObjectId(user);
+
+    // Filter by date range
+    if (startDate || endDate) {
+      filter.createdAt = {};
+      if (startDate) filter.createdAt.$gte = new Date(startDate);
+      if (endDate) filter.createdAt.$lte = new Date(endDate);
+    }
+
+    // Search by transactionId or gatewayTransactionId
+    if (search) {
+      filter.$or = [
+        { transactionId: { $regex: search, $options: "i" } },
+        { gatewayTransactionId: { $regex: search, $options: "i" } }
+      ];
+    }
+
+    // Pagination
+    let page = parseInt(req.query.page) || 1;
+    let limit = parseInt(req.query.limit) || 20;
+    let skip = (page - 1) * limit;
+
+    // Fetch Payments
+    const payments = await Payment.find(filter)
+      .populate("user", "name email phone")
+      .populate("provider", "name email phone serviceName")
+      .populate("shop", "shopName owner email phone")
+      .populate("booking", "serviceName bookingDate status")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const total = await Payment.countDocuments(filter);
+
+    return res.status(200).json({
+      success: true,
+      total,
+      page,
+      pages: Math.ceil(total / limit),
+      payments
+    });
+
+  } catch (error) {
+    console.error("Get All Transactions Error → ", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error while fetching transactions",
+      error: error.message
+    });
   }
 };

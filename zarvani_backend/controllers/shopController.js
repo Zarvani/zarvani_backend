@@ -231,7 +231,7 @@ exports.deleteProduct = async (req, res) => {
 exports.getOrders = async (req, res) => {
   try {
     const { page = 1, limit = 20, status } = req.query;
-    const { Booking } = require('../models/Shop');
+    const Booking = require('../models/Booking');
     
     const query = {
       'products.shop': req.user._id

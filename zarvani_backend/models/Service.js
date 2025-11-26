@@ -6,7 +6,8 @@ const serviceSchema = new mongoose.Schema({
   provider: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'ServiceProvider',
-    required: true
+    required: false,
+    default: null
   },
   title: {
     type: String,
@@ -20,7 +21,7 @@ const serviceSchema = new mongoose.Schema({
   category: {
     type: String,
     required: true,
-     enum: [
+    enum: [
       "plumbing",
       "electrical",
       "carpentry",
@@ -77,14 +78,6 @@ const serviceSchema = new mongoose.Schema({
     value: Number,
     unit: { type: String, enum: ['minutes', 'hours', 'days'], default: 'minutes' }
   },
-  location: {
-    type: {
-      type: String,
-      enum: ['Point'],
-      default: 'Point'
-    },
-    coordinates: [Number]
-  },
   serviceType: {
     type: String,
     enum: ['at-home', 'at-center', 'both'],
@@ -98,7 +91,10 @@ const serviceSchema = new mongoose.Schema({
     average: { type: Number, default: 0 },
     count: { type: Number, default: 0 }
   },
-  tags: [String],
+  tags: {
+    type: [String],   // array of bullet point lines
+    default: []
+  },
   requiredProducts: [{
     product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' },
     quantity: Number
@@ -107,4 +103,4 @@ const serviceSchema = new mongoose.Schema({
 
 serviceSchema.index({ location: '2dsphere' });
 
-module.exports = {Service: mongoose.model('Service', serviceSchema)};
+module.exports = { Service: mongoose.model('Service', serviceSchema) };

@@ -17,6 +17,7 @@ const shopSchema = new mongoose.Schema({
   phone: {
     type: String,
     required: true,
+    match: [/^\+\d{7,15}$/, "Invalid phone number format"],
     unique: true
   },
   password: {
@@ -39,6 +40,7 @@ const shopSchema = new mongoose.Schema({
     addressLine2: String,
     city: String,
     state: String,
+    country:String,
     pincode: String,
     location: {
       type: {
