@@ -138,7 +138,7 @@ exports.submitReview = async (req, res) => {
 };
 exports.getServices = async (req, res) => {
   try {
-    let { page = 1, limit = 10, sortBy = "createdAt", order = "desc" } = req.query;
+    let { page = 1, limit = 100, sortBy = "createdAt", order = "desc" } = req.query;
 
     page = Number(page);
     limit = Number(limit);
@@ -169,11 +169,39 @@ exports.getServices = async (req, res) => {
     });
   }
 };
+// Add this to your backend routes
+exports.getServiceById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const service = await Service.findById(id);
+    
+    if (!service) {
+      return res.status(404).json({
+        success: false,
+        message: "Service not found"
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Service fetched successfully",
+      data: service
+    });
+
+  } catch (error) {
+    console.error("Error fetching service:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Something went wrong",
+      error: error.message
+    });
+  }
+};
 exports.getServicesByCategory = async (req, res) => {
   try {
     const { category } = req.query;
 
-    // If category not provided → return 400
     if (!category) {
       return res.status(400).json({
         success: false,
@@ -181,15 +209,16 @@ exports.getServicesByCategory = async (req, res) => {
       });
     }
 
-    // Find services by category
     const services = await Service.find({ category })
-      .select("-provider -requiredProducts -__v") // remove provider, products if not needed publicly
+      .select("-provider -requiredProducts -__v")
       .lean();
 
+    // If no services → return empty array but success = true
     if (services.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "No services found for this category"
+      return res.status(200).json({
+        success: true,
+        category,
+        services: []  // empty list
       });
     }
 
@@ -198,6 +227,7 @@ exports.getServicesByCategory = async (req, res) => {
       category,
       services
     });
+
   } catch (error) {
     console.error("Error fetching services:", error);
     return res.status(500).json({

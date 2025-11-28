@@ -4,6 +4,8 @@ const { Payment } = require("../models/Payment");
 const PaymentService = require('../services/paymentService');
 const ResponseHandler = require('../utils/responseHandler');
 const logger = require('../utils/logger');
+const CommissionService = require('../services/commissionService');
+
 
 // Create Razorpay Order
 exports.createOrder = async (req, res) => {
@@ -560,3 +562,113 @@ async function calculateSuperAdminStats(period) {
     averageTransactionValue: totalRevenue / (successfulTransactions || 1)
   };
 }
+// Process payment with commission handling
+exports.processPayment = async (req, res) => {
+  try {
+    const { 
+      bookingId, 
+      orderId, 
+      amount, 
+      paymentMethod, 
+      paymentDestination,
+      providerId,
+      shopId 
+    } = req.body;
+
+    const paymentData = {
+      transactionId: `TXN-${Date.now()}`,
+      booking: bookingId,
+      order: orderId,
+      user: req.user._id,
+      provider: providerId,
+      shop: shopId,
+      amount,
+      paymentMethod,
+      paymentDestination
+    };
+
+    let payment;
+
+    if (paymentDestination === 'company_account') {
+      // Payment to company account - auto split 85-15
+      payment = await CommissionService.processCompanyAccountPayment(paymentData);
+    } else if (paymentDestination === 'personal_account') {
+      // Payment to personal account - track pending commission
+      payment = await CommissionService.processPersonalAccountPayment(paymentData);
+    }
+
+    ResponseHandler.success(res, { payment }, 'Payment processed successfully');
+  } catch (error) {
+    logger.error(`Process payment error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// Complete service and handle commission
+exports.completeService = async (req, res) => {
+  try {
+    const { bookingId } = req.body;
+
+    const payment = await CommissionService.markServiceCompleted(bookingId);
+
+    ResponseHandler.success(res, { payment }, 'Service completed and commission processed');
+  } catch (error) {
+    logger.error(`Complete service error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// Get pending commissions (Admin)
+exports.getPendingCommissions = async (req, res) => {
+  try {
+    const { period = 'month' } = req.query;
+
+    const pendingCommissions = await CommissionService.getPendingCommissions(period);
+
+    // Calculate total pending amount
+    const totalPending = pendingCommissions.reduce((sum, payment) => {
+      return sum + payment.pendingCommission.amount;
+    }, 0);
+
+    ResponseHandler.success(res, {
+      pendingCommissions,
+      stats: {
+        totalPending,
+        count: pendingCommissions.length
+      }
+    }, 'Pending commissions fetched successfully');
+  } catch (error) {
+    logger.error(`Get pending commissions error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// Manual commission collection (Admin)
+exports.collectCommission = async (req, res) => {
+  try {
+    const { paymentId } = req.body;
+
+    const payment = await Payment.findById(paymentId);
+
+    if (!payment) {
+      return ResponseHandler.error(res, 'Payment not found', 404);
+    }
+
+    if (payment.paymentDestination !== 'personal_account' || 
+        payment.pendingCommission.status !== 'pending') {
+      return ResponseHandler.error(res, 'No pending commission to collect', 400);
+    }
+
+    payment.pendingCommission.status = 'paid';
+    payment.pendingCommission.paidDate = new Date();
+    await payment.save();
+
+    // Send notification
+    await CommissionService.sendCommissionCollectedNotification(payment);
+
+    ResponseHandler.success(res, { payment }, 'Commission collected successfully');
+  } catch (error) {
+    logger.error(`Collect commission error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
