@@ -1,4 +1,4 @@
-// ============= routes/paymentRoutes.js =============
+// ============= routes/payment.js =============
 const express = require('express');
 const router = express.Router();
 const paymentController = require('../controllers/paymentController');
@@ -6,37 +6,40 @@ const { protect, authorize } = require('../middleware/authMiddleware');
 
 // Public/User routes
 router.use(protect);
+// Public routes
+router.post('/create-order', protect, paymentController.createOrder);
+router.post('/verify', protect, paymentController.verifyPayment);
+router.post('/cash', protect, paymentController.cashPayment);
+router.post('/process', protect, paymentController.processPayment);
 
-// Payment operations
-router.post('/create-order', paymentController.createOrder);
-router.post('/verify', paymentController.verifyPayment);
-router.post('/cash', paymentController.cashPayment);
-router.post('/refund/:id', paymentController.initiateRefund);
+// User routes
+router.get('/history', protect, paymentController.getPaymentHistory);
+router.post('/complete-service', protect, paymentController.completeService);
 
-// User payment history
-router.get('/history', paymentController.getPaymentHistory);
+// Provider/Shop routes
+router.get('/earnings', protect, paymentController.getProviderEarnings);
+router.get('/shop-earnings', protect, paymentController.getShopEarnings);
 
-// Shop earnings (for shop owners)
-router.get('/shop/earnings', 
-  authorize('shop', 'admin'), 
-  paymentController.getShopEarnings
+// Admin routes
+router.get('/admin/commissions/pending', 
+  protect, 
+  authorize('admin'), 
+  paymentController.getPendingCommissions
 );
-
-// Provider earnings (for service providers)
-router.get('/provider/earnings', 
-  authorize('provider', 'admin'), 
-  paymentController.getProviderEarnings
+router.post('/admin/commissions/collect', 
+  protect, 
+  authorize('admin'), 
+  paymentController.collectCommission
 );
-
-// Superadmin routes
-router.get('/admin/overview', 
-  authorize('admin', 'superadmin'), 
-  paymentController.getAllEarningsOverview
-);
-
 router.get('/admin/analytics', 
-  authorize('admin', 'superadmin'), 
+  protect, 
+  authorize('admin'), 
   paymentController.getPaymentAnalytics
+);
+router.get('/admin/earnings', 
+  protect, 
+  authorize('admin'), 
+  paymentController.getAllEarningsOverview
 );
 
 module.exports = router;
