@@ -66,7 +66,7 @@ exports.schemas = {
   createBooking: Joi.object({
     service: Joi.string().required(),
     provider: Joi.string().optional(),
-    scheduledDate: Joi.date().min('now').required(),
+    scheduledDate: Joi.date().min(new Date().setHours(0,0,0,0)).required(),
     scheduledTime: Joi.string().required(),
     address: Joi.object({
       addressLine1: Joi.string().required(),
