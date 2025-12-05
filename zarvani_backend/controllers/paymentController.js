@@ -1,11 +1,11 @@
-// ============= controllers/paymentController.js =============
 const Booking = require("../models/Booking");
-const { Payment } = require("../models/Payment");
+const Order = require("../models/Order");
+const Payment = require("../models/Payment");
 const PaymentService = require('../services/paymentService');
+const QRPaymentService = require('../services/qrPaymentService');
+const CommissionService = require('../services/commissionService');
 const ResponseHandler = require('../utils/responseHandler');
 const logger = require('../utils/logger');
-const CommissionService = require('../services/commissionService');
-
 
 // Create Razorpay Order
 exports.createOrder = async (req, res) => {
@@ -413,7 +413,367 @@ exports.initiateRefund = async (req, res) => {
   }
 };
 
-// ============= Helper Functions =============
+// Process payment with commission handling
+exports.processPayment = async (req, res) => {
+  try {
+    const { 
+      bookingId, 
+      orderId, 
+      amount, 
+      paymentMethod, 
+      paymentDestination,
+      providerId,
+      shopId 
+    } = req.body;
+
+    const paymentData = {
+      transactionId: `TXN-${Date.now()}`,
+      booking: bookingId,
+      order: orderId,
+      user: req.user._id,
+      provider: providerId,
+      shop: shopId,
+      amount,
+      paymentMethod,
+      paymentDestination
+    };
+
+    let payment;
+
+    if (paymentDestination === 'company_account') {
+      // Payment to company account - auto split 85-15
+      payment = await CommissionService.processCompanyAccountPayment(paymentData);
+    } else if (paymentDestination === 'personal_account') {
+      // Payment to personal account - track pending commission
+      payment = await CommissionService.processPersonalAccountPayment(paymentData);
+    }
+
+    ResponseHandler.success(res, { payment }, 'Payment processed successfully');
+  } catch (error) {
+    logger.error(`Process payment error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// Complete service and handle commission
+exports.completeService = async (req, res) => {
+  try {
+    const { bookingId } = req.body;
+
+    const payment = await CommissionService.markServiceCompleted(bookingId);
+
+    ResponseHandler.success(res, { payment }, 'Service completed and commission processed');
+  } catch (error) {
+    logger.error(`Complete service error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// ============= QR PAYMENT METHODS =============
+
+// Generate QR for User Payment
+exports.generateUserQRPayment = async (req, res) => {
+  try {
+    const { bookingId, orderId, amount } = req.body;
+    
+    if (!bookingId && !orderId) {
+      return ResponseHandler.error(res, 'Either bookingId or orderId is required', 400);
+    }
+
+    if (!amount || amount <= 0) {
+      return ResponseHandler.error(res, 'Valid amount is required', 400);
+    }
+    
+    const qrPayment = await QRPaymentService.generateUserQRPayment(
+      bookingId, 
+      orderId, 
+      amount, 
+      req.user._id
+    );
+    
+    ResponseHandler.success(res, { 
+      qrCode: qrPayment.qrImageUrl,
+      upiId: qrPayment.upiId,
+      amount: qrPayment.amount,
+      expiresAt: qrPayment.expiresAt,
+      paymentId: qrPayment._id
+    }, 'QR code generated successfully');
+  } catch (error) {
+    logger.error(`Generate user QR error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// Generate Collection QR for Provider/Shop
+exports.generateCollectionQR = async (req, res) => {
+  try {
+    const { paymentId, destination } = req.body;
+    
+    if (!['company_account', 'personal_account'].includes(destination)) {
+      return ResponseHandler.error(res, 'Invalid payment destination', 400);
+    }
+
+    const user = req.user;
+    const ownerType = user.role === 'provider' ? 'provider' : 'shop';
+    
+    const result = await QRPaymentService.generateCollectionQR(
+      paymentId,
+      destination,
+      user._id,
+      ownerType
+    );
+    
+    ResponseHandler.success(res, { 
+      qrCode: result.qrData.qrImageUrl,
+      upiId: result.qrData.upiId,
+      amount: result.qrData.amount,
+      expiresAt: result.qrData.expiresAt,
+      paymentId: result.payment._id,
+      paymentDestination: destination,
+      pendingCommission: destination === 'personal_account' ? result.payment.commission.pendingCommission : 0,
+      dueDate: destination === 'personal_account' ? result.payment.paymentVerification.dueDate : null
+    }, 'Collection QR generated successfully');
+  } catch (error) {
+    logger.error(`Generate collection QR error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// UPI Payment Webhook (Called by Razorpay/UPI service)
+exports.upiPaymentWebhook = async (req, res) => {
+  try {
+    const { 
+      transactionId, 
+      upiId, 
+      amount, 
+      status, 
+      timestamp,
+      currency = 'INR'
+    } = req.body;
+    
+    if (status === 'success') {
+      const payment = await QRPaymentService.verifyUPIPayment(
+        transactionId, 
+        upiId, 
+        amount,
+        timestamp
+      );
+      
+      ResponseHandler.success(res, { payment }, 'UPI payment verified successfully');
+    } else {
+      // Handle failed payment
+      const payment = await Payment.findOneAndUpdate(
+        { 'qrPayment.upiId': upiId, 'qrPayment.amount': amount },
+        {
+          status: 'failed',
+          'qrPayment.status': 'expired'
+        },
+        { new: true }
+      );
+      
+      ResponseHandler.success(res, { payment }, 'UPI payment failed');
+    }
+  } catch (error) {
+    logger.error(`UPI webhook error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// Get QR Payment Status
+exports.getQRPaymentStatus = async (req, res) => {
+  try {
+    const { paymentId } = req.params;
+    
+    const status = await QRPaymentService.getQRPaymentStatus(paymentId, req.user._id);
+    
+    ResponseHandler.success(res, status, 'QR payment status fetched successfully');
+  } catch (error) {
+    logger.error(`Get QR payment status error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// Check Expired QR Codes (Admin)
+exports.checkExpiredQRs = async (req, res) => {
+  try {
+    const expiredCount = await QRPaymentService.checkExpiredQRs();
+    
+    ResponseHandler.success(res, { expiredCount }, 'Expired QR check completed');
+  } catch (error) {
+    logger.error(`Check expired QR error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// ============= COMMISSION MANAGEMENT METHODS =============
+
+// Get Pending Commissions (Admin)
+exports.getPendingCommissions = async (req, res) => {
+  try {
+    const { period = 'month', type, ownerId } = req.query;
+    
+    const filters = {};
+    if (type === 'provider') {
+      filters.provider = { $ne: null };
+    } else if (type === 'shop') {
+      filters.shop = { $ne: null };
+    }
+    
+    if (ownerId) {
+      if (type === 'provider') {
+        filters.provider = ownerId;
+      } else if (type === 'shop') {
+        filters.shop = ownerId;
+      }
+    }
+    
+    const pendingCommissions = await CommissionService.getPendingCommissions(period, filters);
+    const overdueCommissions = await CommissionService.getOverdueCommissions();
+    const stats = await CommissionService.getCommissionStats(period);
+    
+    ResponseHandler.success(res, {
+      pending: pendingCommissions,
+      overdue: overdueCommissions,
+      stats
+    }, 'Commissions data fetched successfully');
+  } catch (error) {
+    logger.error(`Get commissions error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// Mark Commission as Paid
+exports.markCommissionPaid = async (req, res) => {
+  try {
+    const { paymentId, proof } = req.body;
+    
+    if (!paymentId) {
+      return ResponseHandler.error(res, 'Payment ID is required', 400);
+    }
+    
+    const payment = await CommissionService.markCommissionPaid(
+      paymentId, 
+      req.user._id,
+      proof
+    );
+    
+    ResponseHandler.success(res, { payment }, 'Commission marked as paid successfully');
+  } catch (error) {
+    logger.error(`Mark commission paid error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// Send Commission Reminders (Cron Job - Admin)
+exports.sendCommissionReminders = async (req, res) => {
+  try {
+    const reminderCount = await CommissionService.sendCommissionReminders();
+    const dueDateReminderCount = await CommissionService.sendDueDateReminders();
+    
+    ResponseHandler.success(res, { 
+      overdueReminders: reminderCount,
+      dueDateReminders: dueDateReminderCount
+    }, 'Commission reminders sent successfully');
+  } catch (error) {
+    logger.error(`Send commission reminders error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// Get Commission Statistics
+exports.getCommissionStats = async (req, res) => {
+  try {
+    const { period = 'month' } = req.query;
+    
+    const stats = await CommissionService.getCommissionStats(period);
+    
+    ResponseHandler.success(res, stats, 'Commission statistics fetched successfully');
+  } catch (error) {
+    logger.error(`Get commission stats error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// Get Owner Commission Summary (For Provider/Shop)
+exports.getOwnerCommissionSummary = async (req, res) => {
+  try {
+    const { period = 'month' } = req.query;
+    const ownerId = req.user._id;
+    const ownerType = req.user.role === 'provider' ? 'provider' : 'shop';
+    
+    const summary = await CommissionService.getOwnerCommissionSummary(ownerId, ownerType, period);
+    
+    ResponseHandler.success(res, { summary }, 'Commission summary fetched successfully');
+  } catch (error) {
+    logger.error(`Get owner commission summary error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// Generate Commission Report (Admin)
+exports.generateCommissionReport = async (req, res) => {
+  try {
+    const { period = 'month', format = 'json' } = req.query;
+    
+    const report = await CommissionService.generateCommissionReport(period, format);
+    
+    if (format === 'csv') {
+      // Implement CSV conversion if needed
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename=commission-report-${period}-${Date.now()}.csv`);
+      // Return CSV data
+    } else {
+      ResponseHandler.success(res, report, 'Commission report generated successfully');
+    }
+  } catch (error) {
+    logger.error(`Generate commission report error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// Get Payment Details with Commission Info
+exports.getPaymentDetails = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const payment = await Payment.findById(id)
+      .populate('user', 'name phone email')
+      .populate('provider', 'name phone email bankDetails')
+      .populate('shop', 'name phone email bankDetails')
+      .populate('booking', 'bookingId serviceDetails')
+      .populate('order', 'orderId items');
+    
+    if (!payment) {
+      return ResponseHandler.error(res, 'Payment not found', 404);
+    }
+    
+    // Check authorization
+    const userId = req.user._id;
+    const userRole = req.user.role;
+    
+    let isAuthorized = false;
+    if (userRole === 'admin') {
+      isAuthorized = true;
+    } else if (userRole === 'user' && payment.user._id.toString() === userId.toString()) {
+      isAuthorized = true;
+    } else if (userRole === 'provider' && payment.provider && payment.provider._id.toString() === userId.toString()) {
+      isAuthorized = true;
+    } else if (userRole === 'shop' && payment.shop && payment.shop._id.toString() === userId.toString()) {
+      isAuthorized = true;
+    }
+    
+    if (!isAuthorized) {
+      return ResponseHandler.error(res, 'Not authorized to view this payment', 403);
+    }
+    
+    ResponseHandler.success(res, { payment }, 'Payment details fetched successfully');
+  } catch (error) {
+    logger.error(`Get payment details error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// ============= HELPER FUNCTIONS =============
 
 function getDateFilter(period) {
   const now = new Date();
@@ -474,7 +834,7 @@ async function calculateShopStats(shopId, period) {
   const successPayments = allPayments.filter(p => p.status === 'success');
   
   const totalEarnings = successPayments.reduce((sum, p) => sum + p.amount, 0);
-  const pendingPayouts = successPayments.reduce((sum, p) => sum + p.amount, 0); // Can add payout logic
+  const pendingPayouts = successPayments.reduce((sum, p) => sum + (p.commission.providerEarning || 0), 0);
   
   // This month
   const thisMonthFilter = getDateFilter('month');
@@ -485,14 +845,21 @@ async function calculateShopStats(shopId, period) {
   });
   const thisMonth = thisMonthPayments.reduce((sum, p) => sum + p.amount, 0);
   
-  // Last payout (mock - implement actual payout tracking)
-  const lastPayout = 5000;
+  // Pending commissions for personal account payments
+  const pendingCommissions = await Payment.find({
+    shop: shopId,
+    paymentDestination: 'personal_account',
+    'paymentVerification.status': 'pending',
+    status: 'success'
+  });
+  const totalPendingCommission = pendingCommissions.reduce((sum, p) => sum + p.commission.pendingCommission, 0);
   
   return {
     totalEarnings,
     pendingPayouts,
     thisMonth,
-    lastPayout
+    totalPendingCommission,
+    pendingCommissionCount: pendingCommissions.length
   };
 }
 
@@ -504,7 +871,7 @@ async function calculateProviderStats(providerId, period) {
   const successPayments = allPayments.filter(p => p.status === 'success');
   
   const totalEarnings = successPayments.reduce((sum, p) => sum + p.amount, 0);
-  const pendingPayouts = successPayments.reduce((sum, p) => sum + p.amount, 0);
+  const pendingPayouts = successPayments.reduce((sum, p) => sum + (p.commission.providerEarning || 0), 0);
   
   // This month
   const thisMonthFilter = getDateFilter('month');
@@ -517,11 +884,22 @@ async function calculateProviderStats(providerId, period) {
   
   const totalBookings = successPayments.length;
   
+  // Pending commissions for personal account payments
+  const pendingCommissions = await Payment.find({
+    provider: providerId,
+    paymentDestination: 'personal_account',
+    'paymentVerification.status': 'pending',
+    status: 'success'
+  });
+  const totalPendingCommission = pendingCommissions.reduce((sum, p) => sum + p.commission.pendingCommission, 0);
+  
   return {
     totalEarnings,
     pendingPayouts,
     thisMonth,
-    totalBookings
+    totalBookings,
+    totalPendingCommission,
+    pendingCommissionCount: pendingCommissions.length
   };
 }
 
@@ -547,7 +925,18 @@ async function calculateSuperAdminStats(period) {
   
   const refundedAmount = allPayments
     .filter(p => p.status === 'refunded')
-    .reduce((sum, p) => sum + p.refundAmount, 0);
+    .reduce((sum, p) => sum + (p.refund?.amount || 0), 0);
+  
+  // Commission stats
+  const companyAccountPayments = successPayments.filter(p => p.paymentDestination === 'company_account');
+  const personalAccountPayments = successPayments.filter(p => p.paymentDestination === 'personal_account');
+  
+  const totalCommission = companyAccountPayments.reduce((sum, p) => sum + (p.commission.companyCommission || 0), 0) +
+                         personalAccountPayments.reduce((sum, p) => sum + (p.commission.pendingCommission || 0), 0);
+  
+  const pendingCommission = personalAccountPayments
+    .filter(p => p.paymentVerification?.status === 'pending')
+    .reduce((sum, p) => sum + (p.commission.pendingCommission || 0), 0);
   
   return {
     totalRevenue,
@@ -559,116 +948,12 @@ async function calculateSuperAdminStats(period) {
     failedTransactions,
     refundedTransactions,
     refundedAmount,
-    averageTransactionValue: totalRevenue / (successfulTransactions || 1)
+    totalCommission,
+    pendingCommission,
+    averageTransactionValue: totalRevenue / (successfulTransactions || 1),
+    companyAccountTransactions: companyAccountPayments.length,
+    personalAccountTransactions: personalAccountPayments.length
   };
 }
-// Process payment with commission handling
-exports.processPayment = async (req, res) => {
-  try {
-    const { 
-      bookingId, 
-      orderId, 
-      amount, 
-      paymentMethod, 
-      paymentDestination,
-      providerId,
-      shopId 
-    } = req.body;
 
-    const paymentData = {
-      transactionId: `TXN-${Date.now()}`,
-      booking: bookingId,
-      order: orderId,
-      user: req.user._id,
-      provider: providerId,
-      shop: shopId,
-      amount,
-      paymentMethod,
-      paymentDestination
-    };
-
-    let payment;
-
-    if (paymentDestination === 'company_account') {
-      // Payment to company account - auto split 85-15
-      payment = await CommissionService.processCompanyAccountPayment(paymentData);
-    } else if (paymentDestination === 'personal_account') {
-      // Payment to personal account - track pending commission
-      payment = await CommissionService.processPersonalAccountPayment(paymentData);
-    }
-
-    ResponseHandler.success(res, { payment }, 'Payment processed successfully');
-  } catch (error) {
-    logger.error(`Process payment error: ${error.message}`);
-    ResponseHandler.error(res, error.message, 500);
-  }
-};
-
-// Complete service and handle commission
-exports.completeService = async (req, res) => {
-  try {
-    const { bookingId } = req.body;
-
-    const payment = await CommissionService.markServiceCompleted(bookingId);
-
-    ResponseHandler.success(res, { payment }, 'Service completed and commission processed');
-  } catch (error) {
-    logger.error(`Complete service error: ${error.message}`);
-    ResponseHandler.error(res, error.message, 500);
-  }
-};
-
-// Get pending commissions (Admin)
-exports.getPendingCommissions = async (req, res) => {
-  try {
-    const { period = 'month' } = req.query;
-
-    const pendingCommissions = await CommissionService.getPendingCommissions(period);
-
-    // Calculate total pending amount
-    const totalPending = pendingCommissions.reduce((sum, payment) => {
-      return sum + payment.pendingCommission.amount;
-    }, 0);
-
-    ResponseHandler.success(res, {
-      pendingCommissions,
-      stats: {
-        totalPending,
-        count: pendingCommissions.length
-      }
-    }, 'Pending commissions fetched successfully');
-  } catch (error) {
-    logger.error(`Get pending commissions error: ${error.message}`);
-    ResponseHandler.error(res, error.message, 500);
-  }
-};
-
-// Manual commission collection (Admin)
-exports.collectCommission = async (req, res) => {
-  try {
-    const { paymentId } = req.body;
-
-    const payment = await Payment.findById(paymentId);
-
-    if (!payment) {
-      return ResponseHandler.error(res, 'Payment not found', 404);
-    }
-
-    if (payment.paymentDestination !== 'personal_account' || 
-        payment.pendingCommission.status !== 'pending') {
-      return ResponseHandler.error(res, 'No pending commission to collect', 400);
-    }
-
-    payment.pendingCommission.status = 'paid';
-    payment.pendingCommission.paidDate = new Date();
-    await payment.save();
-
-    // Send notification
-    await CommissionService.sendCommissionCollectedNotification(payment);
-
-    ResponseHandler.success(res, { payment }, 'Commission collected successfully');
-  } catch (error) {
-    logger.error(`Collect commission error: ${error.message}`);
-    ResponseHandler.error(res, error.message, 500);
-  }
-};
+module.exports = exports;

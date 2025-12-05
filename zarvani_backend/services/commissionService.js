@@ -1,358 +1,290 @@
-// ============= services/commissionService.js =============
 const Payment = require('../models/Payment');
 const ServiceProvider = require('../models/ServiceProvider');
-const { Shop } = require('../models/Shop');
-const { Notification } = require('../models/Notification');
+const Shop = require('../models/Shop');
 const logger = require('../utils/logger');
 
 class CommissionService {
-  constructor() {
-    this.COMMISSION_RATE = 15; // 15%
-    this.PENDING_COMMISSION_DAYS = 7; // 7 days to pay commission
-  }
-
-  calculateCommission(amount) {
-    const commission = (amount * this.COMMISSION_RATE) / 100;
-    const providerEarning = amount - commission;
-    
-    return {
-      companyCommission: parseFloat(commission.toFixed(2)),
-      providerEarning: parseFloat(providerEarning.toFixed(2)),
-      commissionRate: this.COMMISSION_RATE,
-      calculatedAt: new Date()
-    };
-  }
-
-  async processCompanyAccountPayment(paymentData) {
-    const session = await Payment.startSession();
-    session.startTransaction();
-
+  
+  // Get all pending commissions
+  static async getPendingCommissions(period = 'month', filters = {}) {
     try {
-      const { amount, providerId, shopId } = paymentData;
+      const dateFilter = this.getDateFilter(period);
       
-      const commission = this.calculateCommission(amount);
-      
-      const payment = await Payment.create([{
-        ...paymentData,
-        commission,
-        paymentDestination: 'company_account',
-        status: 'success',
-        paymentDate: new Date(),
-        payout: {
-          status: 'pending'
-        }
-      }], { session });
-
-      // Update provider/shop earnings
-      if (providerId) {
-        await ServiceProvider.findByIdAndUpdate(
-          providerId,
-          {
-            $inc: {
-              'earnings.total': commission.providerEarning,
-              'earnings.pending': commission.providerEarning
-            }
-          },
-          { session }
-        );
-      } else if (shopId) {
-        await Shop.findByIdAndUpdate(
-          shopId,
-          {
-            $inc: {
-              'earnings.total': commission.providerEarning,
-              'earnings.pending': commission.providerEarning
-            }
-          },
-          { session }
-        );
-      }
-
-      await session.commitTransaction();
-      
-      logger.info(`Company account payment processed: ${payment[0]._id}`);
-      return payment[0];
-      
-    } catch (error) {
-      await session.abortTransaction();
-      logger.error(`Company account payment failed: ${error.message}`);
-      throw error;
-    } finally {
-      session.endSession();
-    }
-  }
-
-  async processPersonalAccountPayment(paymentData) {
-    try {
-      const { amount } = paymentData;
-      const commission = this.calculateCommission(amount);
-      
-      const dueDate = new Date();
-      dueDate.setDate(dueDate.getDate() + this.PENDING_COMMISSION_DAYS);
-
-      const payment = await Payment.create({
-        ...paymentData,
-        commission,
+      const query = {
         paymentDestination: 'personal_account',
-        pendingCommission: {
-          amount: commission.companyCommission,
-          status: 'pending',
-          dueDate: dueDate
-        },
+        'paymentVerification.status': 'pending',
         status: 'success',
-        paymentDate: new Date()
-      });
+        ...dateFilter,
+        ...filters
+      };
 
-      // Schedule commission reminder
-      this.scheduleCommissionReminder(payment._id);
+      const pendingCommissions = await Payment.find(query)
+        .populate('provider', 'name phone email')
+        .populate('shop', 'name phone email')
+        .populate('user', 'name phone')
+        .populate('booking', 'bookingId')
+        .populate('order', 'orderId')
+        .sort({ 'paymentVerification.dueDate': 1 });
 
-      logger.info(`Personal account payment processed: ${payment._id}`);
-      return payment;
-      
+      return pendingCommissions;
     } catch (error) {
-      logger.error(`Personal account payment failed: ${error.message}`);
+      logger.error(`Get pending commissions error: ${error.message}`);
       throw error;
     }
   }
 
-  async markServiceCompleted(bookingId, orderId = null) {
-    const session = await Payment.startSession();
-    session.startTransaction();
-
+  // Get overdue commissions
+  static async getOverdueCommissions() {
     try {
-      let query = {};
-      if (bookingId) query.booking = bookingId;
-      if (orderId) query.order = orderId;
+      const overdueCommissions = await Payment.find({
+        paymentDestination: 'personal_account',
+        'paymentVerification.status': 'pending',
+        'paymentVerification.dueDate': { $lt: new Date() },
+        status: 'success'
+      })
+        .populate('provider', 'name phone email')
+        .populate('shop', 'name phone email')
+        .populate('user', 'name phone')
+        .populate('booking', 'bookingId')
+        .populate('order', 'orderId')
+        .sort({ 'paymentVerification.dueDate': 1 });
 
-      const payment = await Payment.findOne(query).session(session);
+      return overdueCommissions;
+    } catch (error) {
+      logger.error(`Get overdue commissions error: ${error.message}`);
+      throw error;
+    }
+  }
+
+  // Mark commission as paid
+  static async markCommissionPaid(paymentId, adminId, proof = null) {
+    try {
+      const payment = await Payment.findById(paymentId);
       
       if (!payment) {
         throw new Error('Payment not found');
       }
 
-      if (payment.paymentDestination === 'personal_account' && 
-          payment.pendingCommission.status === 'pending') {
-        
-        payment.pendingCommission.status = 'paid';
-        payment.pendingCommission.paidDate = new Date();
-        await payment.save({ session });
-
-        // Update provider/shop earnings
-        if (payment.provider) {
-          await ServiceProvider.findByIdAndUpdate(
-            payment.provider,
-            {
-              $inc: {
-                'earnings.total': payment.commission.providerEarning,
-                'earnings.pending': payment.commission.providerEarning
-              }
-            },
-            { session }
-          );
-        } else if (payment.shop) {
-          await Shop.findByIdAndUpdate(
-            payment.shop,
-            {
-              $inc: {
-                'earnings.total': payment.commission.providerEarning,
-                'earnings.pending': payment.commission.providerEarning
-              }
-            },
-            { session }
-          );
-        }
-
-        await this.sendCommissionCollectedNotification(payment);
+      if (payment.paymentDestination !== 'personal_account') {
+        throw new Error('Commission only applicable for personal account payments');
       }
 
-      await session.commitTransaction();
-      logger.info(`Service completed and commission processed: ${payment._id}`);
-      return payment;
-      
-    } catch (error) {
-      await session.abortTransaction();
-      logger.error(`Mark service completed failed: ${error.message}`);
-      throw error;
-    } finally {
-      session.endSession();
-    }
-  }
+      payment.paymentVerification.status = 'verified';
+      payment.paymentVerification.verifiedAt = new Date();
+      payment.paymentVerification.verifiedBy = adminId;
+      payment.commission.pendingCommission = 0;
+      payment.commission.companyCommission = payment.amount * 0.20; // Record the collected commission
 
-  async initiatePayout(payoutData) {
-    try {
-      const { paymentId, recipientId, recipientType, amount } = payoutData;
-      
-      // Implement actual payout logic (RazorpayX, PayPal, etc.)
-      const payoutResult = await this.processPayoutToBank(recipientId, amount);
-      
-      if (payoutResult.success) {
-        await Payment.findByIdAndUpdate(paymentId, {
-          'payout.status': 'completed',
-          'payout.payoutDate': new Date(),
-          'payout.payoutId': payoutResult.payoutId,
-          $inc: { 'earnings.pending': -amount }
-        });
-
-        logger.info(`Payout completed: ${paymentId}`);
-      } else {
-        throw new Error(payoutResult.error || 'Payout failed');
-      }
-      
-      return payoutResult;
-    } catch (error) {
-      await Payment.findByIdAndUpdate(paymentId, {
-        'payout.status': 'failed',
-        'payout.failureReason': error.message,
-        $inc: { 'payout.retryCount': 1 },
-        'payout.lastRetryAt': new Date()
-      });
-      
-      logger.error(`Payout failed: ${paymentId} - ${error.message}`);
-      throw error;
-    }
-  }
-
-  async scheduleCommissionReminder(paymentId) {
-    // Schedule reminders for 3 days before due date and on due date
-    const payment = await Payment.findById(paymentId);
-    if (!payment) return;
-
-    const dueDate = new Date(payment.pendingCommission.dueDate);
-    const reminderDate = new Date(dueDate);
-    reminderDate.setDate(reminderDate.getDate() - 3);
-
-    // Schedule reminder (you can use node-cron, agenda, or similar)
-    setTimeout(async () => {
-      await this.sendCommissionReminder(paymentId);
-    }, reminderDate.getTime() - Date.now());
-  }
-
-  async sendCommissionReminder(paymentId) {
-    try {
-      const payment = await Payment.findById(paymentId)
-        .populate('provider', 'name email phone')
-        .populate('shop', 'name email phone')
-        .populate('user', 'name');
-
-      if (!payment || payment.pendingCommission.status !== 'pending') {
-        return;
-      }
-
-      const recipient = payment.provider || payment.shop;
-      const serviceType = payment.provider ? 'service' : 'order';
-
-      await Notification.create({
-        recipient: recipient._id,
-        recipientModel: payment.provider ? 'ServiceProvider' : 'Shop',
-        type: 'commission_reminder',
-        title: 'Commission Payment Reminder',
-        message: `Reminder: Please pay 15% commission (₹${payment.pendingCommission.amount}) for ${serviceType} completed for ${payment.user.name}. Due date: ${payment.pendingCommission.dueDate.toLocaleDateString()}`,
-        data: {
-          paymentId: payment._id,
-          amount: payment.pendingCommission.amount,
-          dueDate: payment.pendingCommission.dueDate,
-          serviceType: serviceType
-        },
-        channels: {
-          push: true,
-          email: true,
-          sms: true
-        }
-      });
-
-      // Update reminder sent status
-      payment.pendingCommission.reminderSent = true;
-      payment.pendingCommission.remindersSent.push({
-        sentAt: new Date(),
-        type: 'email'
-      });
       await payment.save();
 
-      logger.info(`Commission reminder sent: ${payment._id}`);
+      // Send confirmation notification
+      await this.sendCommissionPaidNotification(payment);
+
+      logger.info(`Commission marked as paid for payment: ${paymentId} by admin: ${adminId}`);
+      return payment;
     } catch (error) {
-      logger.error(`Send commission reminder failed: ${error.message}`);
+      logger.error(`Mark commission paid error: ${error.message}`);
+      throw error;
     }
   }
 
-  async sendCommissionCollectedNotification(payment) {
+  // Auto-remind overdue commissions
+  static async sendCommissionReminders() {
     try {
-      await Notification.create({
-        recipient: 'admin', // Or specific admin user
-        recipientModel: 'User',
-        type: 'commission_collected',
-        title: 'Commission Collected',
-        message: `Commission of ₹${payment.pendingCommission.amount} collected for payment ${payment.transactionId}`,
-        data: {
-          paymentId: payment._id,
-          amount: payment.pendingCommission.amount,
-          collectedAt: new Date()
-        },
-        channels: {
-          push: true,
-          email: true
+      const overduePayments = await this.getOverdueCommissions();
+      const NotificationService = require('./pushNotification');
+      
+      let reminderCount = 0;
+
+      for (const payment of overduePayments) {
+        const owner = await payment.getPaymentOwner();
+        
+        if (owner) {
+          await NotificationService.sendToUser(
+            owner._id,
+            'Commission Overdue',
+            `URGENT: Your commission of ₹${payment.commission.pendingCommission} is overdue. Please pay immediately to avoid account suspension.`
+          );
+
+          // Update reminder count
+          payment.paymentVerification.remindersSent.push({
+            sentAt: new Date(),
+            type: 'overdue',
+            method: 'push'
+          });
+
+          await payment.save();
+          reminderCount++;
         }
+      }
+
+      logger.info(`Commission reminders sent: ${reminderCount}`);
+      return reminderCount;
+    } catch (error) {
+      logger.error(`Send commission reminders error: ${error.message}`);
+      throw error;
+    }
+  }
+
+  // Send due date reminders
+  static async sendDueDateReminders() {
+    try {
+      const dueSoonDate = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours from now
+      
+      const dueSoonPayments = await Payment.find({
+        paymentDestination: 'personal_account',
+        'paymentVerification.status': 'pending',
+        'paymentVerification.dueDate': { 
+          $lte: dueSoonDate,
+          $gt: new Date() 
+        },
+        status: 'success'
       });
 
-      logger.info(`Commission collected notification sent: ${payment._id}`);
+      const NotificationService = require('./pushNotification');
+      let reminderCount = 0;
+
+      for (const payment of dueSoonPayments) {
+        const owner = await payment.getPaymentOwner();
+        
+        if (owner) {
+          await NotificationService.sendToUser(
+            owner._id,
+            'Commission Due Tomorrow',
+            `Reminder: Your commission of ₹${payment.commission.pendingCommission} is due tomorrow.`
+          );
+
+          payment.paymentVerification.remindersSent.push({
+            sentAt: new Date(),
+            type: 'reminder',
+            method: 'push'
+          });
+
+          await payment.save();
+          reminderCount++;
+        }
+      }
+
+      logger.info(`Due date reminders sent: ${reminderCount}`);
+      return reminderCount;
     } catch (error) {
-      logger.error(`Send commission collected notification failed: ${error.message}`);
+      logger.error(`Send due date reminders error: ${error.message}`);
+      throw error;
     }
   }
 
-  async getPendingCommissions(filters = {}) {
-    const {
-      period = 'month',
-      page = 1,
-      limit = 50,
-      sortBy = 'pendingCommission.dueDate',
-      sortOrder = 'asc'
-    } = filters;
+  // Calculate commission statistics
+  static async getCommissionStats(period = 'month') {
+    try {
+      const dateFilter = this.getDateFilter(period);
+      
+      const stats = await Payment.aggregate([
+        {
+          $match: {
+            status: 'success',
+            ...dateFilter
+          }
+        },
+        {
+          $group: {
+            _id: '$paymentDestination',
+            totalAmount: { $sum: '$amount' },
+            totalCommission: { $sum: '$commission.companyCommission' },
+            pendingCommission: { 
+              $sum: {
+                $cond: [
+                  { 
+                    $and: [
+                      { $eq: ['$paymentDestination', 'personal_account'] },
+                      { $eq: ['$paymentVerification.status', 'pending'] }
+                    ]
+                  },
+                  '$commission.pendingCommission',
+                  0
+                ]
+              }
+            },
+            collectedCommission: {
+              $sum: {
+                $cond: [
+                  { 
+                    $and: [
+                      { $eq: ['$paymentDestination', 'personal_account'] },
+                      { $eq: ['$paymentVerification.status', 'verified'] }
+                    ]
+                  },
+                  '$commission.pendingCommission',
+                  0
+                ]
+              }
+            },
+            count: { $sum: 1 }
+          }
+        }
+      ]);
 
-    const dateFilter = this.getDateFilter(period);
-    const query = {
-      'pendingCommission.status': 'pending',
-      ...dateFilter
-    };
+      // Calculate overall totals
+      const overallStats = {
+        totalRevenue: stats.reduce((sum, stat) => sum + stat.totalAmount, 0),
+        totalCommission: stats.reduce((sum, stat) => sum + stat.totalCommission, 0),
+        totalPendingCommission: stats.reduce((sum, stat) => sum + stat.pendingCommission, 0),
+        totalCollectedCommission: stats.reduce((sum, stat) => sum + stat.collectedCommission, 0),
+        byDestination: stats
+      };
 
-    if (filters.providerId) query.provider = filters.providerId;
-    if (filters.shopId) query.shop = filters.shopId;
-
-    const skip = (page - 1) * limit;
-    const sort = { [sortBy]: sortOrder === 'desc' ? -1 : 1 };
-
-    const [payments, total] = await Promise.all([
-      Payment.find(query)
-        .populate('user', 'name email phone')
-        .populate('provider', 'name email phone')
-        .populate('shop', 'name email phone')
-        .populate('booking', 'bookingId serviceDetails')
-        .populate('order', 'orderId items')
-        .sort(sort)
-        .skip(skip)
-        .limit(limit),
-      Payment.countDocuments(query)
-    ]);
-
-    const totalPendingAmount = payments.reduce((sum, payment) => {
-      return sum + payment.pendingCommission.amount;
-    }, 0);
-
-    return {
-      payments,
-      pagination: {
-        current: page,
-        total: Math.ceil(total / limit),
-        count: total,
-        limit
-      },
-      summary: {
-        totalPendingAmount: parseFloat(totalPendingAmount.toFixed(2)),
-        totalPendingCommissions: total
-      }
-    };
+      return overallStats;
+    } catch (error) {
+      logger.error(`Get commission stats error: ${error.message}`);
+      throw error;
+    }
   }
 
-  getDateFilter(period) {
+  // Get provider/shop commission summary
+  static async getOwnerCommissionSummary(ownerId, ownerType, period = 'month') {
+    try {
+      const dateFilter = this.getDateFilter(period);
+      const ownerField = ownerType === 'provider' ? 'provider' : 'shop';
+      
+      const summary = await Payment.aggregate([
+        {
+          $match: {
+            [ownerField]: ownerId,
+            status: 'success',
+            ...dateFilter
+          }
+        },
+        {
+          $group: {
+            _id: '$paymentDestination',
+            totalEarnings: { $sum: '$commission.providerEarning' },
+            totalCommission: { $sum: '$commission.companyCommission' },
+            pendingCommission: {
+              $sum: {
+                $cond: [
+                  { 
+                    $and: [
+                      { $eq: ['$paymentDestination', 'personal_account'] },
+                      { $eq: ['$paymentVerification.status', 'pending'] }
+                    ]
+                  },
+                  '$commission.pendingCommission',
+                  0
+                ]
+              }
+            },
+            paymentCount: { $sum: 1 }
+          }
+        }
+      ]);
+
+      return summary;
+    } catch (error) {
+      logger.error(`Get owner commission summary error: ${error.message}`);
+      throw error;
+    }
+  }
+
+  static getDateFilter(period) {
     const now = new Date();
     let startDate;
 
@@ -376,15 +308,69 @@ class CommissionService {
     return { createdAt: { $gte: startDate } };
   }
 
-  // Mock payout processor - implement with actual payment gateway
-  async processPayoutToBank(recipientId, amount) {
-    // Implement with RazorpayX, PayPal Payouts, etc.
-    return {
-      success: true,
-      payoutId: `pout_${Date.now()}`,
-      amount: amount
-    };
+  static async sendCommissionPaidNotification(payment) {
+    try {
+      const owner = await payment.getPaymentOwner();
+      const NotificationService = require('./pushNotification');
+      
+      await NotificationService.sendToUser(
+        owner._id,
+        'Commission Paid',
+        'Thank you for paying your commission. Your payment has been verified and recorded.'
+      );
+
+      logger.info(`Commission paid notification sent for payment: ${payment._id}`);
+    } catch (error) {
+      logger.error(`Send commission paid notification error: ${error.message}`);
+    }
+  }
+
+  // Generate commission report
+  static async generateCommissionReport(period = 'month', format = 'json') {
+    try {
+      const stats = await this.getCommissionStats(period);
+      const pendingCommissions = await this.getPendingCommissions(period);
+      const overdueCommissions = await this.getOverdueCommissions();
+
+      const report = {
+        period,
+        generatedAt: new Date(),
+        summary: stats,
+        pendingCommissions: {
+          count: pendingCommissions.length,
+          totalAmount: pendingCommissions.reduce((sum, p) => sum + p.commission.pendingCommission, 0),
+          items: pendingCommissions.map(p => ({
+            paymentId: p._id,
+            transactionId: p.transactionId,
+            amount: p.amount,
+            pendingCommission: p.commission.pendingCommission,
+            dueDate: p.paymentVerification.dueDate,
+            owner: p.provider ? 'provider' : 'shop',
+            ownerId: p.provider || p.shop
+          }))
+        },
+        overdueCommissions: {
+          count: overdueCommissions.length,
+          totalAmount: overdueCommissions.reduce((sum, p) => sum + p.commission.pendingCommission, 0),
+          items: overdueCommissions.map(p => ({
+            paymentId: p._id,
+            transactionId: p.transactionId,
+            amount: p.amount,
+            pendingCommission: p.commission.pendingCommission,
+            dueDate: p.paymentVerification.dueDate,
+            daysOverdue: Math.ceil((new Date() - p.paymentVerification.dueDate) / (1000 * 60 * 60 * 24)),
+            owner: p.provider ? 'provider' : 'shop',
+            ownerId: p.provider || p.shop
+          }))
+        }
+      };
+
+      return report;
+    } catch (error) {
+      logger.error(`Generate commission report error: ${error.message}`);
+      throw error;
+    }
   }
 }
 
-module.exports = new CommissionService();
+module.exports = CommissionService;

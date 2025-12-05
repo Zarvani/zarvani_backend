@@ -856,35 +856,51 @@ exports.getCurrentUser = async (req, res) => {
 
 exports.updateLocation = async (req, res) => {
   try {
-    const userId = req.user.id; // from auth middleware
+    const userId = req.user.id;
     const { coordinates } = req.body;
 
-    if (!coordinates || !Array.isArray(coordinates) || coordinates.length !== 2) {
+    // Validate coordinates
+    if (
+      !coordinates ||
+      !Array.isArray(coordinates) ||
+      coordinates.length !== 2 ||
+      isNaN(coordinates[0]) ||
+      isNaN(coordinates[1])
+    ) {
       return res.status(400).json({
         success: false,
-        message: "Coordinates must be [longitude, latitude]"
+        message: "Coordinates required in format: [longitude, latitude]"
       });
     }
 
-    // 1️⃣ Try to update USER location (NO ADDRESS CHECK)
+    // ================================
+    // 1️⃣ TRY USER UPDATE
+    // ================================
     let user = await User.findById(userId);
 
     if (user) {
-      // If no addresses array → create one automatically
       if (!user.addresses || user.addresses.length === 0) {
+        // Create minimal address only for coordinates
         user.addresses = [
           {
+            label: "Home",
+            addressLine1: "Unknown",
+            city: "Unknown",
+            state: "Unknown",
+            pincode: "000000",
             isDefault: true,
             location: {
               type: "Point",
-              coordinates: coordinates
+              coordinates
             }
           }
         ];
       } else {
-        // update only coordinates for first/default address
-        const address = user.addresses.find(a => a.isDefault) || user.addresses[0];
-        address.location.coordinates = coordinates;
+        // Update only default address coordinates
+        const defaultAddress =
+          user.addresses.find(a => a.isDefault) || user.addresses[0];
+
+        defaultAddress.location.coordinates = coordinates;
       }
 
       await user.save();
@@ -892,28 +908,33 @@ exports.updateLocation = async (req, res) => {
       return res.status(200).json({
         success: true,
         message: "User location updated successfully",
-        location: user.addresses.find(a => a.isDefault)?.location || user.addresses[0].location
+        location:
+          user.addresses.find(a => a.isDefault)?.location ||
+          user.addresses[0].location
       });
     }
 
-    // 2️⃣ Try to update SERVICE PROVIDER location
+    // ================================
+    // 2️⃣ TRY SERVICE PROVIDER UPDATE
+    // ================================
     let provider = await ServiceProvider.findById(userId);
 
     if (!provider) {
       return res.status(404).json({
         success: false,
-        message: "User / Provider not found"
+        message: "User or Provider not found"
       });
     }
 
-    // If provider address missing → auto create
+    // Ensure address object exists
     if (!provider.address) {
       provider.address = {};
     }
+
     if (!provider.address.location) {
       provider.address.location = {
         type: "Point",
-        coordinates: coordinates
+        coordinates
       };
     } else {
       provider.address.location.coordinates = coordinates;
@@ -923,16 +944,17 @@ exports.updateLocation = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: "Provider location updated successfully",
+      message: "Service Provider location updated successfully",
       location: provider.address.location
     });
 
   } catch (error) {
     console.error("Location update error:", error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Internal server error",
       error: error.message
     });
   }
 };
+
