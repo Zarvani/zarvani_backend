@@ -1,4 +1,4 @@
-// ============= routes/bookingRoutes.js (COMPLETE - ONLY REQUIRED ROUTES) =============
+// routes/bookingRoutes.js
 const express = require('express');
 const router = express.Router();
 const bookingController = require('../controllers/bookingController');
@@ -7,20 +7,29 @@ const { validateSchema, schemas } = require('../middleware/validateRequest');
 
 router.use(protect);
 
-// ============= USER ROUTES =============
-router.post('/', authorize('user'), validateSchema(schemas.createBooking), bookingController.createBooking);
-router.get('/:id', bookingController.getBookingDetails);
-router.put('/:id/cancel', authorize('user'), bookingController.cancelBooking);
-router.get('/:id/tracking', authorize('user'), bookingController.getTrackingInfo);
-router.get('/user/my-bookings',authorize('user'),bookingController.getUserBookings
-);
-// ============= PROVIDER ROUTES =============
-router.get('/provider/pending-requests', authorize('provider'), bookingController.getPendingRequests);
-router.post('/:bookingId/accept', authorize('provider'), bookingController.acceptBooking);
-router.post('/:bookingId/reject', authorize('provider'), bookingController.rejectBooking);
-router.put('/:bookingId/status', authorize('provider'), bookingController.updateBookingStatus);
-router.put('/:bookingId/location', authorize('provider'), bookingController.updateProviderLocation);
-router.get('/provider/my-bookings',authorize('provider'),bookingController.getProviderBookings);
-router.get('/provider/stats',authorize('provider'),bookingController.getProviderStats);
+// User routes
+router.post('/',  authorize('user'), bookingController.createBooking);
+router.get('/my-bookings',  authorize('user'), bookingController.getUserBookings);
+router.get('/:id',  bookingController.getBookingDetails);
+router.get('/:id/tracking',  bookingController.getTrackingInfo);
+router.get('/:id/acceptance-status',  authorize('user'), bookingController.getBookingAcceptanceStatus);
+router.post('/:id/cancel',  authorize('user'), bookingController.cancelBooking);
+router.post('/:id/resend-notifications',  authorize('user'), bookingController.resendProviderNotifications);
+
+// Provider routes
+router.get('/provider/pending-requests',  authorize('provider'), bookingController.getPendingRequests);
+router.get('/provider/stats',  authorize('provider'), bookingController.getProviderStats);
+router.get('/provider/bookings',  authorize('provider'), bookingController.getProviderBookings);
+router.post('/:id/accept',  authorize('provider'), bookingController.acceptBooking);
+router.post('/:id/reject',  authorize('provider'), bookingController.rejectBooking);
+router.post('/:id/update-location',  authorize('provider'), bookingController.updateProviderLocation);
+router.post('/:id/update-status',  authorize('provider'), bookingController.updateBookingStatus);
+
+// Admin routes
+router.get('/admin/all',  authorize('admin'), bookingController.getAllBookings);
+router.post('/admin/:id/update-status',  authorize('admin'), bookingController.adminUpdateBookingStatus);
+
+// Analytics routes (all roles)
+router.get('/analytics',  bookingController.getBookingAnalytics);
 
 module.exports = router;

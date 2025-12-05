@@ -92,7 +92,7 @@ const serviceProviderSchema = new mongoose.Schema({
       verified: { type: Boolean, default: false }
     }
   },
-  serviceCategories: [{
+  serviceCategories: {
     type: [String],
     enum: [
       "plumbing",
@@ -135,7 +135,7 @@ const serviceProviderSchema = new mongoose.Schema({
       "pet-grooming",
       "other"
     ]
-}],
+},
   specializations: [String],
   portfolio: [{
     title: String,
