@@ -1,837 +1,2521 @@
-// ============= controllers/orderController.js (NEW) =============
 const Order = require('../models/Order');
-const { Shop } = require('../models/Shop');
-const {Product} = require("../models/Product")
-const ServiceProvider = require('../models/ServiceProvider');
+const Shop = require('../models/Shop');
+const Product = require('../models/Product');
+const User = require('../models/User');
 const ResponseHandler = require('../utils/responseHandler');
 const GeoService = require('../services/geoService');
 const PushNotificationService = require('../services/pushNotification');
 const logger = require('../utils/logger');
+const mongoose = require('mongoose');
 
-// Create Order (User places order)
+// Helper: Generate unique order ID
+const generateOrderId = () => {
+  const timestamp = Date.now().toString().slice(-8);
+  const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+  return `ORD${timestamp}${random}`;
+};
+
+// Helper: Calculate delivery fee
+const calculateDeliveryFee = (shop, distance, orderAmount) => {
+  const settings = shop.deliverySettings;
+  
+  // Check for free delivery
+  if (orderAmount >= settings.deliveryFee.freeDeliveryAbove) {
+    return 0;
+  }
+  
+  // Base fee + per km charge
+  let fee = settings.deliveryFee.baseFee;
+  if (distance > 1) { // First km free or included in base
+    fee += Math.ceil(distance - 1) * settings.deliveryFee.perKm;
+  }
+  
+  // Cap at maximum if needed
+  const maxFee = settings.deliveryFee.baseFee + 
+                (settings.radius * settings.deliveryFee.perKm);
+  return Math.min(fee, maxFee);
+};
+
+// ==================== USER ORDER FLOW ====================
+
 exports.createOrder = async (req, res) => {
+  const session = await mongoose.startSession();
+
   try {
-    const { shopId, items, deliveryAddress, paymentMethod, notes, deliveryInstructions } = req.body;
+    session.startTransaction();
+
+    const { 
+      shopId, 
+      items, 
+      deliveryAddressId, 
+      deliveryType = 'standard',
+      deliverySlot,
+      deliveryInstructions,
+      paymentMethod,
+      couponCode,
+      tip = 0,
+      notes 
+    } = req.body;
     
-    const shop = await Shop.findById(shopId);
-    if (!shop || !shop.isActive) {
-      return ResponseHandler.error(res, 'Shop not available', 404);
-    }
-    
-    // Get coordinates for delivery address
-    const geoResult = await GeoService.getCoordinatesFromAddress(deliveryAddress);
-    if (geoResult.success) {
-      deliveryAddress.location = {
-        type: 'Point',
-        coordinates: geoResult.coordinates
-      };
-    }
-    
-    // Validate and calculate total
-    let subtotal = 0;
-    const orderItems = [];
-    
-    for (const item of items) {
-      const product = await Product.findById(item.product);
-      if (!product || !product.isAvailable) {
-        return ResponseHandler.error(res, `Product ${item.product} not available`, 400);
-      }
-      
-      if (product.stock.quantity < item.quantity) {
-        return ResponseHandler.error(res, `Insufficient stock for ${product.name}`, 400);
-      }
-      
-      const itemTotal = product.price.sellingPrice * item.quantity;
-      subtotal += itemTotal;
-      
-      orderItems.push({
-        product: product._id,
-        name: product.name,
-        quantity: item.quantity,
-        price: product.price.sellingPrice,
-        total: itemTotal
-      });
-    }
-    
-    // Calculate delivery fee based on distance
+    const userId = req.user._id;
+
+    // Fetch user
+    const user = await User.findById(userId).session(session);
+    if (!user) throw new Error('User not found');
+
+    const deliveryAddress = user.addresses.id(deliveryAddressId);
+    if (!deliveryAddress) throw new Error('Delivery address not found');
+   
+    // Fetch shop
+    const shop = await Shop.findById(shopId).session(session);
+    if (!shop || !shop.isActive || !shop.isOpen) throw new Error('Shop is not available');
+    if (!shop.isShopOpenNow()) throw new Error('Shop is currently closed');
+
+    // Calculate distance
     const distance = GeoService.calculateDistance(
       shop.address.location.coordinates[1],
       shop.address.location.coordinates[0],
       deliveryAddress.location.coordinates[1],
       deliveryAddress.location.coordinates[0]
     );
-    
-    let deliveryFee = 0;
-    if (distance > 5) {
-      deliveryFee = Math.ceil(distance - 5) * 10; // ₹10 per km after 5km
-    }
-    
-    const totalAmount = subtotal + deliveryFee;
-    
-    // Generate order ID
-    const orderId = `ORD${Date.now()}${Math.floor(Math.random() * 1000)}`;
-    
-    // Create order
-    const order = await Order.create({
-      orderId,
-      user: req.user._id,
-      shop: shopId,
-      items: orderItems,
-      deliveryAddress,
-      subtotal,
-      deliveryFee,
-      totalAmount,
-      paymentMethod,
-      notes,
-      deliveryInstructions,
-      status: 'placed',
-      tracking: {
-        shopLocation: shop.address.location
-      },
-      timestamps: {
-        placedAt: new Date()
-      }
-    });
-    
-    // Notify shop
-    await PushNotificationService.sendToUser(
-      shopId,
-      'New Order Received',
-      `Order ${orderId} - ₹${totalAmount}. Accept within 60 seconds.`
-    );
-    
-    // Set timeout for shop response
-    setTimeout(() => handleShopTimeout(order._id), 60000); // 60 seconds
-    
-    await order.populate('shop user items.product');
-    
-    ResponseHandler.success(res, { order }, 'Order placed successfully. Waiting for shop confirmation.', 201);
-  } catch (error) {
-    logger.error(`Create order error: ${error.message}`);
-    ResponseHandler.error(res, error.message, 500);
-  }
-};
 
-// Handle Shop Response Timeout
-async function handleShopTimeout(orderId) {
-  try {
-    const order = await Order.findById(orderId);
-    
-    if (!order || order.status !== 'placed') {
-      return;
-    }
-    
-    // Shop didn't respond, cancel order
-    order.status = 'cancelled';
-    order.cancelledBy = 'system';
-    order.cancellationReason = 'Shop did not respond in time';
-    order.timestamps.cancelledAt = new Date();
-    await order.save();
-    
-    // Notify user
-    await PushNotificationService.sendToUser(
-      order.user,
-      'Order Cancelled',
-      'Shop did not accept your order. Please try another shop.'
-    );
-    
-    // Refund if payment was made
-    // ... refund logic
-  } catch (error) {
-    logger.error(`Shop timeout error: ${error.message}`);
-  }
-}
+    if (distance > shop.deliverySettings.radius) throw new Error('Delivery not available at this location');
 
-// Shop Accepts Order
-exports.acceptOrder = async (req, res) => {
-  try {
-    const { orderId } = req.params;
-    const { estimatedPreparationTime } = req.body;
-    const shopId = req.user._id;
-    
-    const order = await Order.findOne({ _id: orderId, shop: shopId }).populate('user items.product');
-    
-    if (!order) {
-      return ResponseHandler.error(res, 'Order not found', 404);
-    }
-    
-    if (order.status !== 'placed') {
-      return ResponseHandler.error(res, 'Order already processed', 400);
-    }
-    
-    // Update product stock
-    for (const item of order.items) {
-      await Product.findByIdAndUpdate(item.product._id, {
-        $inc: { 'stock.quantity': -item.quantity }
+    // Validate items and calculate totals
+    let itemsTotal = 0;
+    let savings = 0;
+    const orderItems = [];
+
+    for (const item of items) {
+      const product = await Product.findById(item.productId).session(session);
+      if (!product || !product.isAvailable) throw new Error(`Product ${item.name || item.productId} not available`);
+      if (product.shop.toString() !== shopId.toString()) throw new Error(`Product ${product.name} doesn't belong to this shop`);
+      if (product.stock.quantity < item.quantity) throw new Error(`Insufficient stock for ${product.name}`);
+
+      const itemTotal = product.price.sellingPrice * item.quantity;
+      const itemSavings = (product.price.mrp - product.price.sellingPrice) * item.quantity;
+
+      itemsTotal += itemTotal;
+      savings += itemSavings;
+
+      orderItems.push({
+        product: product._id,
+        name: product.name,
+        image: product.images[0]?.url,
+        quantity: item.quantity,
+        price: {
+          mrp: product.price.mrp,
+          sellingPrice: product.price.sellingPrice,
+          discount: product.price.discount
+        },
+        total: itemTotal,
+        weight: product.weight,
+        variant: item.variant,
+        addons: item.addons || []
       });
     }
-    
-    order.status = 'accepted';
-    order.shopAcceptedAt = new Date();
-    order.timestamps.acceptedAt = new Date();
-    if (estimatedPreparationTime) {
-      order.estimatedPreparationTime = estimatedPreparationTime;
+
+    if (itemsTotal < shop.deliverySettings.minOrderAmount) {
+      throw new Error(`Minimum order amount is ₹${shop.deliverySettings.minOrderAmount}`);
     }
-    await order.save();
-    
-    // Notify user
-    await PushNotificationService.sendToUser(
-      order.user,
-      'Order Accepted',
-      `Your order has been accepted and will be ready in ${order.estimatedPreparationTime} minutes.`
+
+    const deliveryFee = calculateDeliveryFee(shop, distance, itemsTotal);
+    const packagingCharge = shop.deliverySettings.packagingCharge || 0;
+    const tax = Math.round(itemsTotal * 0.05); // 5% GST
+    const discountAmount = couponCode ? Math.min(50, itemsTotal * 0.1) : 0; // example
+    const subtotal = itemsTotal + deliveryFee + packagingCharge + tax - discountAmount + tip;
+    const totalAmount = subtotal;
+
+    const orderId = generateOrderId();
+
+    // Create order object
+    const order = new Order({
+      orderId,
+      user: userId,
+      shop: shopId,
+      items: orderItems,
+      deliveryAddress: deliveryAddress.toObject(),
+      deliveryInfo: {
+        type: deliveryType,
+        slot: deliverySlot,
+        instructions: deliveryInstructions,
+        contactless: true,
+        otp: { code: Math.floor(1000 + Math.random() * 9000).toString(), verified: false }
+      },
+      status: 'pending',
+      timestamps: { placedAt: new Date() },
+      pricing: {
+        itemsTotal,
+        tax,
+        deliveryFee,
+        packagingCharge,
+        tip,
+        discount: { couponCode, amount: discountAmount, type: 'fixed' },
+        subtotal,
+        totalAmount,
+        savings
+      },
+      payment: { method: paymentMethod, status: paymentMethod === 'cod' ? 'pending' : 'paid' },
+      customerInfo: { name: user.name, phone: user.phone, email: user.email },
+      shopInfo: {
+        name: shop.name,
+        phone: shop.phone,
+        address: shop.address.formattedAddress || `${shop.address.addressLine1}, ${shop.address.city}`,
+        location: shop.address.location
+      },
+      tracking: {
+        shopLocation: shop.address.location,
+        userLocation: deliveryAddress.location,
+        distance: { shopToUser: distance }
+      },
+      notes,
+      source: req.headers['x-platform'] || 'app',
+      deviceInfo: {
+        platform: req.headers['x-device-platform'] || 'unknown',
+        version: req.headers['x-app-version'] || '1.0.0'
+      }
+    });
+
+    // Reduce product stock
+    for (const item of items) {
+      await Product.findByIdAndUpdate(
+        item.productId,
+        { $inc: { 'stock.quantity': -item.quantity } },
+        { session }
+      );
+    }
+
+    // Update shop stats
+    await Shop.findByIdAndUpdate(
+      shopId,
+      {
+        $inc: {
+          'orderStats.total': 1,
+          'orderStats.today': 1,
+          'orderStats.pending': 1,
+          'earnings.today': totalAmount,
+          'earnings.weekly': totalAmount,
+          'earnings.monthly': totalAmount,
+          'earnings.total': totalAmount,
+          'earnings.pending': paymentMethod === 'cod' ? totalAmount : 0
+        }
+      },
+      { session }
     );
-    
-    ResponseHandler.success(res, { order }, 'Order accepted successfully');
+
+    await order.save({ session });
+
+    // Commit transaction
+    await session.commitTransaction();
+    session.endSession();
+
+    // Populate for response
+    const populatedOrder = await Order.findById(order._id)
+      .populate('shop', 'name logo phone address')
+      .populate('user', 'name phone');
+
+    // Send push notification (outside transaction)
+    PushNotificationService.sendToShop(
+      shopId,
+      'New Order Received',
+      `Order #${orderId} - ₹${totalAmount}`,
+      { orderId: order._id, type: 'new_order' }
+    ).catch(err => logger.error(err));
+
+    ResponseHandler.success(
+      res,
+      { order: populatedOrder },
+      'Order placed successfully. Waiting for shop confirmation.',
+      201
+    );
+
   } catch (error) {
-    logger.error(`Accept order error: ${error.message}`);
-    ResponseHandler.error(res, error.message, 500);
+    try { await session.abortTransaction(); } catch {}
+    session.endSession();
+
+    logger.error(`Create order error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 400);
   }
 };
 
-// Shop Rejects Order
+
+// 2. Shop Accepts Order
+exports.acceptOrder = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  let committed = false;
+
+  try {
+    const { orderId } = req.params;
+    const shopId = req.user._id;
+
+    const order = await Order.findOne({
+      _id: orderId,
+      shop: shopId,
+      status: 'pending'
+    }).session(session);
+
+    if (!order) {
+      await session.abortTransaction();
+      return ResponseHandler.error(res, 'Order not found or already processed', 404);
+    }
+
+    // Assign delivery boy
+    const shop = await Shop.findById(shopId).session(session);
+    const deliveryBoy = await shop.assignDeliveryBoy(orderId);
+
+    if (!deliveryBoy) {
+      await session.abortTransaction();
+      return ResponseHandler.error(res, 'No delivery boy available', 400);
+    }
+
+    // Update order
+    order.status = 'confirmed';
+    order.deliveryBoy = deliveryBoy._id;
+    order.timestamps.confirmedAt = new Date();
+    order._updatedBy = 'shop';
+
+    // Update stats
+    await Shop.findByIdAndUpdate(
+      shopId,
+      {
+        $inc: {
+          'orderStats.pending': -1,
+          'orderStats.preparing': 1
+        }
+      },
+      { session }
+    );
+
+    await order.save({ session });
+
+    await session.commitTransaction();
+    committed = true;
+
+  } catch (error) {
+
+    if (!committed) {
+      // Only abort if not already committed
+      await session.abortTransaction();
+    }
+
+    logger.error(`Accept order error: ${error.message}`);
+    return ResponseHandler.error(res, error.message, 500);
+
+  } finally {
+    session.endSession();
+  }
+
+  // ------------------------------
+  // 🚀 POST-COMMIT OPERATIONS
+  // ------------------------------
+  try {
+    // Now safe to send notifications
+    const order = await Order.findById(req.params.orderId)
+      .populate('shop', 'name logo phone')
+      .populate('deliveryBoy', 'name phone vehicle');
+
+    await PushNotificationService.sendToUser(
+      order.user,
+      'Order Confirmed',
+      `Your order #${order.orderId} has been confirmed and will be ready soon.`
+    );
+
+    await PushNotificationService.sendToDeliveryPerson(
+      order.deliveryBoy._id,
+      order.shop._id,
+      'New Delivery Assignment',
+      `Pickup order #${order.orderId} from ${order.shop.name}`,
+      {
+        orderId: order._id,
+        shopId: order.shop._id,
+        shopName: order.shop.name,
+        shopAddress: order.shop.address.formattedAddress,
+        shopLocation: order.shop.address.location.coordinates
+      }
+    );
+
+    return ResponseHandler.success(res, { order }, 'Order accepted successfully');
+
+  } catch (notifyError) {
+    logger.error("Notification error (no transaction rollback needed): " + notifyError.message);
+    return ResponseHandler.success(
+      res,
+      { orderId: req.params.orderId },
+      "Order accepted, but notifications failed"
+    );
+  }
+};
+
+// 3. Shop Rejects Order
 exports.rejectOrder = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  
   try {
     const { orderId } = req.params;
     const { reason } = req.body;
     const shopId = req.user._id;
     
-    const order = await Order.findOne({ _id: orderId, shop: shopId });
+    const order = await Order.findOne({
+      _id: orderId,
+      shop: shopId,
+      status: 'pending'
+    }).session(session);
     
     if (!order) {
-      return ResponseHandler.error(res, 'Order not found', 404);
+      await session.abortTransaction();
+      return ResponseHandler.error(res, 'Order not found or already processed', 404);
     }
     
-    if (order.status !== 'placed') {
-      return ResponseHandler.error(res, 'Order already processed', 400);
+    // Restore product stock
+    for (const item of order.items) {
+      await Product.findByIdAndUpdate(
+        item.product,
+        { $inc: { 'stock.quantity': item.quantity } },
+        { session }
+      );
     }
     
+    // Update order
     order.status = 'rejected';
-    order.shopRejectedAt = new Date();
-    order.rejectionReason = reason;
-    order.cancelledBy = 'shop';
-    await order.save();
+    order.rejection = { reason };
+    order.timestamps.rejectedAt = new Date();
+    order._updatedBy = 'shop';
     
-    // Notify user
+    // Update shop stats
+    await Shop.findByIdAndUpdate(
+      shopId,
+      { 
+        $inc: { 
+          'orderStats.pending': -1,
+          'orderStats.cancelled': 1
+        }
+      },
+      { session }
+    );
+    
+    await order.save({ session });
+    await session.commitTransaction();
+    
+    // Refund payment if online
+    if (order.payment.method !== 'cod' && order.payment.status === 'paid') {
+      // Implement refund logic here
+      order.payment.status = 'refunded';
+      order.payment.refundedAt = new Date();
+      await order.save();
+    }
+    
+    // Send notification
     await PushNotificationService.sendToUser(
       order.user,
       'Order Rejected',
-      `Your order was rejected by the shop. Reason: ${reason}`
+      `Shop rejected your order #${order.orderId}. Reason: ${reason}`
     );
     
-    ResponseHandler.success(res, null, 'Order rejected');
+    ResponseHandler.success(res, { order }, 'Order rejected');
+    
   } catch (error) {
+    await session.abortTransaction();
     logger.error(`Reject order error: ${error.message}`);
     ResponseHandler.error(res, error.message, 500);
+  } finally {
+    session.endSession();
   }
 };
 
-// Shop Updates Order Status (Preparing, Packed)
+// 4. Update Order Status (Shop: Preparing, Ready, Packed, etc.)
+
 exports.updateOrderStatus = async (req, res) => {
   try {
     const { orderId } = req.params;
     const { status } = req.body;
     const shopId = req.user._id;
-    
-    const order = await Order.findOne({ _id: orderId, shop: shopId }).populate('user');
-    
+
+    // Valid statuses allowed for shop
+    const validStatuses = ['confirmed', 'preparing', 'ready', 'packed', 'out_for_delivery'];
+    if (!validStatuses.includes(status)) {
+      return ResponseHandler.error(res, 'Invalid status update', 400);
+    }
+
+    // Find order
+    const order = await Order.findOne({ _id: orderId, shop: shopId });
     if (!order) {
       return ResponseHandler.error(res, 'Order not found', 404);
     }
-    
-    order.status = status;
-    
-    if (status === 'preparing') {
-      order.timestamps.preparingAt = new Date();
-    } else if (status === 'packed') {
-      order.timestamps.packedAt = new Date();
-      
-      // Start searching for delivery partner
-      order.status = 'searching-delivery';
-      order.timestamps.searchingDeliveryAt = new Date();
-      await order.save();
-      
-      // Search for delivery partners
-      await searchDeliveryPartners(order);
-      
-      return ResponseHandler.success(res, { order }, 'Order packed. Searching for delivery partner...');
-    }
-    
-    await order.save();
-    
-    // Notify user
-    const statusMessages = {
-      'preparing': 'Your order is being prepared',
-      'packed': 'Your order is packed and ready for delivery'
+
+    // Status transition rules
+    const statusOrder = {
+      'pending': ['confirmed', 'rejected', 'cancelled'],
+      'confirmed': ['preparing', 'cancelled'],
+      'preparing': ['ready', 'cancelled'],
+      'ready': ['packed', 'cancelled'],
+      'packed': ['out_for_delivery', 'cancelled'],
+      'out_for_delivery': ['delivered', 'cancelled'],
+      'arriving': ['delivered', 'cancelled'],
+      'delivered': [],
+      'cancelled': [],
+      'rejected': []
     };
-    
+
+    const allowedTransitions = statusOrder[order.status] || [];
+    if (!allowedTransitions.includes(status)) {
+      return ResponseHandler.error(
+        res,
+        `Cannot transition from ${order.status} to ${status}`,
+        400
+      );
+    }
+
+    // Update status
+    const oldStatus = order.status;
+    order.status = status;
+    order._updatedBy = 'shop';
+
+    // Timestamps mapping
+    const timestampMap = {
+      'confirmed': 'confirmedAt',
+      'preparing': 'preparingAt',
+      'ready': 'readyAt',
+      'packed': 'packedAt',
+      'out_for_delivery': 'outForDeliveryAt',
+      'delivered': 'deliveredAt'
+    };
+
+    if (timestampMap[status]) {
+      order.timestamps[timestampMap[status]] = new Date();
+    }
+
+    // Update shop stats
+    await Shop.findByIdAndUpdate(shopId, {
+      $inc: {
+        [`orderStats.${oldStatus}`]: -1,
+        [`orderStats.${status}`]: 1
+      }
+    });
+
+    // **IMPORTANT FIX**
+    // prevent deliveryAddress validation error
+    await order.save({ validateBeforeSave: false });
+
+    // Notifications
+    const statusMessages = {
+      'confirmed': 'Your order has been accepted by the shop',
+      'preparing': 'Your order is being prepared',
+      'ready': 'Your order is ready for pickup',
+      'packed': 'Your order has been packed',
+      'out_for_delivery': 'Your order is out for delivery'
+    };
+
     if (statusMessages[status]) {
       await PushNotificationService.sendToUser(
-        order.user._id,
-        'Order Update',
+        order.user,
+        'Order Status Update',
         statusMessages[status]
       );
     }
-    
-    ResponseHandler.success(res, { order }, 'Order status updated');
+
+    // Notify delivery boy when ready for pickup
+    if (status === 'ready' && order.deliveryBoy) {
+      await PushNotificationService.sendToDeliveryPerson(
+        order.deliveryBoy,
+        shopId,
+        'Order Ready for Pickup',
+        `Order #${order.orderId} is ready for pickup`,
+        {
+          orderId: order._id,
+          pickupReady: true
+        }
+      );
+    }
+
+    return ResponseHandler.success(res, { order }, `Order status updated to ${status}`);
+
   } catch (error) {
     logger.error(`Update order status error: ${error.message}`);
-    ResponseHandler.error(res, error.message, 500);
+    return ResponseHandler.error(res, error.message, 500);
   }
 };
 
-// Search for Delivery Partners
-async function searchDeliveryPartners(order) {
-  try {
-    const shopLocation = order.tracking.shopLocation.coordinates;
-    const searchRadius = order.deliverySearchRadius;
-    
-    // Find available delivery partners (service providers with delivery capability)
-    const availablePartners = await ServiceProvider.find({
-      verificationStatus: 'approved',
-      isActive: true,
-      'availability.isAvailable': true,
-      serviceCategories: 'Delivery', // Assuming delivery partners have "Delivery" category
-      'address.location': {
-        $near: {
-          $geometry: {
-            type: 'Point',
-            coordinates: shopLocation
-          },
-          $maxDistance: searchRadius * 1000
-        }
-      }
-    }).limit(15);
-    
-    if (availablePartners.length === 0) {
-      // No delivery partners found, expand radius
-      if (order.deliverySearchAttempts < 3 && order.deliverySearchRadius < 10) {
-        order.deliverySearchRadius += 2;
-        order.deliverySearchAttempts += 1;
-        await order.save();
-        
-        setTimeout(() => searchDeliveryPartners(order), 10000);
-        return;
-      } else {
-        // Cancel order - no delivery partner found
-        order.status = 'cancelled';
-        order.cancelledBy = 'system';
-        order.cancellationReason = 'No delivery partner available';
-        await order.save();
-        
-        await PushNotificationService.sendToUser(
-          order.user,
-          'Order Cancelled',
-          'Sorry, no delivery partner is available. Your payment will be refunded.'
-        );
-        return;
-      }
-    }
-    
-    // Notify all available delivery partners
-    for (const partner of availablePartners) {
-      order.notifiedDeliveryPartners.push({
-        partner: partner._id,
-        notifiedAt: new Date(),
-        response: 'pending'
-      });
-      
-      const distanceToShop = GeoService.calculateDistance(
-        partner.address.location.coordinates[1],
-        partner.address.location.coordinates[0],
-        shopLocation[1],
-        shopLocation[0]
-      );
-      
-      await PushNotificationService.sendToUser(
-        partner._id,
-        'New Delivery Request',
-        `Pickup from shop - ${order.items.length} items - ₹${order.totalAmount}. Distance: ${distanceToShop.toFixed(1)}km`
-      );
-    }
-    
-    await order.save();
-    
-    // Timeout for delivery partner response (30 seconds)
-    setTimeout(() => handleDeliveryPartnerTimeout(order._id), 30000);
-  } catch (error) {
-    logger.error(`Search delivery partners error: ${error.message}`);
-  }
-}
 
-// Handle Delivery Partner Timeout
-async function handleDeliveryPartnerTimeout(orderId) {
-  try {
-    const order = await Order.findById(orderId);
-    
-    if (!order || order.status !== 'searching-delivery') {
-      return;
-    }
-    
-    // Mark timed-out partners
-    order.notifiedDeliveryPartners.forEach(np => {
-      if (np.response === 'pending') {
-        np.response = 'timeout';
-      }
-    });
-    
-    // Expand search
-    if (order.deliverySearchAttempts < 3) {
-      order.deliverySearchRadius += 2;
-      order.deliverySearchAttempts += 1;
-      await order.save();
-      await searchDeliveryPartners(order);
-    } else {
-      order.status = 'cancelled';
-      order.cancelledBy = 'system';
-      order.cancellationReason = 'No delivery partner accepted';
-      await order.save();
-    }
-  } catch (error) {
-    logger.error(`Delivery timeout error: ${error.message}`);
-  }
-}
-
-// Delivery Partner Accepts Order
-exports.acceptDelivery = async (req, res) => {
+// 5. Delivery Boy Picks Up Order
+exports.pickupOrder = async (req, res) => {
   try {
     const { orderId } = req.params;
-    const partnerId = req.user._id;
-    
-    const order = await Order.findById(orderId).populate('user shop');
-    
-    if (!order) {
-      return ResponseHandler.error(res, 'Order not found', 404);
-    }
-    
-    if (order.status !== 'searching-delivery') {
-      return ResponseHandler.error(res, 'Order already assigned', 400);
-    }
-    
-    const notifiedPartner = order.notifiedDeliveryPartners.find(
-      np => np.partner.toString() === partnerId.toString()
-    );
-    
-    if (!notifiedPartner || notifiedPartner.response !== 'pending') {
-      return ResponseHandler.error(res, 'Cannot accept this delivery', 400);
-    }
-    
-    // Assign delivery partner
-    order.deliveryPartner = partnerId;
-    order.status = 'out-for-delivery';
-    order.timestamps.outForDeliveryAt = new Date();
-    
-    notifiedPartner.response = 'accepted';
-    notifiedPartner.respondedAt = new Date();
-    
-    // Mark others as timeout
-    order.notifiedDeliveryPartners.forEach(np => {
-      if (np.response === 'pending' && np.partner.toString() !== partnerId.toString()) {
-        np.response = 'timeout';
-      }
-    });
-    
-    await order.save();
-    
-    // Notify user
-    const partner = await ServiceProvider.findById(partnerId);
-    await PushNotificationService.sendToUser(
-      order.user._id,
-      'Out for Delivery',
-      `${partner.name} is delivering your order. Track your delivery in real-time.`
-    );
-    
-    // Notify shop
-    await PushNotificationService.sendToUser(
-      order.shop._id,
-      'Delivery Partner Assigned',
-      `${partner.name} will pick up the order.`
-    );
-    
-    ResponseHandler.success(res, { order }, 'Delivery accepted');
-  } catch (error) {
-    logger.error(`Accept delivery error: ${error.message}`);
-    ResponseHandler.error(res, error.message, 500);
-  }
-};
-
-// Update Delivery Location (Real-time tracking)
-exports.updateDeliveryLocation = async (req, res) => {
-  try {
-    const { orderId } = req.params;
-    const { latitude, longitude } = req.body;
-    const partnerId = req.user._id;
+    const { latitude, longitude, address } = req.body;
+    const deliveryBoyId = req.user._id;
     
     const order = await Order.findOne({
       _id: orderId,
-      deliveryPartner: partnerId
+      deliveryBoy: deliveryBoyId,
+      status: 'ready'
+    });
+    
+    if (!order) {
+      return ResponseHandler.error(res, 'Order not found or not ready for pickup', 404);
+    }
+    
+    // Update delivery boy location
+    const shop = await Shop.findById(order.shop);
+    const deliveryBoy = shop.deliveryBoys.id(deliveryBoyId);
+    
+    if (deliveryBoy) {
+      deliveryBoy.currentLocation = {
+        type: 'Point',
+        coordinates: [longitude, latitude],
+        address: address,
+        updatedAt: new Date()
+      };
+      await shop.save();
+    }
+    
+    // Update order
+    order.status = 'out_for_delivery';
+    order.timestamps.pickedUpAt = new Date();
+    order.timestamps.outForDeliveryAt = new Date();
+    order._updatedBy = 'delivery_boy';
+    
+    await order.updateDeliveryBoyLocation(latitude, longitude, address);
+    await order.save();
+    
+    // Update shop stats
+    await Shop.findByIdAndUpdate(order.shop, {
+      $inc: {
+        'orderStats.ready': -1,
+        'orderStats.outForDelivery': 1
+      }
+    });
+    
+    // Send notifications
+    await PushNotificationService.sendToUser(
+      order.user,
+      'Out for Delivery',
+      `Your order is on the way! Estimated delivery: ${order.tracking.estimatedDeliveryTime ? new Date(order.tracking.estimatedDeliveryTime).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'Soon'}`
+    );
+    
+    ResponseHandler.success(res, { order }, 'Order picked up successfully');
+    
+  } catch (error) {
+    logger.error(`Pickup order error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// 6. Update Delivery Location (Real-time tracking)
+exports.updateDeliveryLocation = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { latitude, longitude, address } = req.body;
+    const deliveryBoyId = req.user._id;
+    
+    const order = await Order.findOne({
+      _id: orderId,
+      deliveryBoy: deliveryBoyId,
+      status: 'out_for_delivery'
     });
     
     if (!order) {
       return ResponseHandler.error(res, 'Order not found', 404);
     }
     
-    // Update location
-    order.tracking.deliveryPartnerLocation = {
-      type: 'Point',
-      coordinates: [longitude, latitude],
-      updatedAt: new Date()
-    };
+    // Update shop's delivery boy location
+    const shop = await Shop.findById(order.shop);
+    const deliveryBoy = shop.deliveryBoys.id(deliveryBoyId);
     
-    // Calculate distance to delivery address
-    const deliveryLocation = order.deliveryAddress.location.coordinates;
-    const distance = GeoService.calculateDistance(
-      latitude,
-      longitude,
-      deliveryLocation[1],
-      deliveryLocation[0]
-    );
+    if (deliveryBoy) {
+      deliveryBoy.currentLocation = {
+        type: 'Point',
+        coordinates: [longitude, latitude],
+        address: address,
+        updatedAt: new Date()
+      };
+      await shop.save();
+    }
     
-    order.tracking.distance = distance;
-    const durationMinutes = (distance / 20) * 60; // Assuming 20 km/h average
-    order.tracking.duration = Math.round(durationMinutes);
-    order.tracking.estimatedDeliveryTime = new Date(Date.now() + durationMinutes * 60000);
+    // Update order tracking
+    await order.updateDeliveryBoyLocation(latitude, longitude, address);
     
-    await order.save();
-    
-    // Notify user if very close
-    if (distance < 0.5) {
+    // Check if delivery boy is close to destination (within 500m)
+    const distanceToUser = order.tracking.distance.boyToUser;
+    if (distanceToUser < 0.5 && order.status !== 'arriving') {
+      order.status = 'arriving';
+      order.timestamps.arrivingAt = new Date();
+      order._updatedBy = 'system';
+      await order.save();
+      
       await PushNotificationService.sendToUser(
         order.user,
-        'Delivery Nearby',
-        'Your delivery partner is nearby and will reach in a few minutes!'
+        'Delivery Partner Arriving',
+        'Your delivery partner is arriving in 2-3 minutes!'
       );
     }
     
     ResponseHandler.success(res, {
-      distance,
-      duration: durationMinutes,
-      estimatedDelivery: order.tracking.estimatedDeliveryTime
+      distance: distanceToUser,
+      eta: order.tracking.estimatedDeliveryTime,
+      status: order.status
     }, 'Location updated');
+    
   } catch (error) {
     logger.error(`Update delivery location error: ${error.message}`);
     ResponseHandler.error(res, error.message, 500);
   }
 };
 
-// Mark Order as Delivered
+// 7. Mark Order as Delivered
 exports.markDelivered = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  
   try {
     const { orderId } = req.params;
-    const { otp } = req.body; // Optional OTP verification
-    const partnerId = req.user._id;
+    const { otp } = req.body;
+    const deliveryBoyId = req.user._id;
     
     const order = await Order.findOne({
       _id: orderId,
-      deliveryPartner: partnerId
-    }).populate('user');
+      deliveryBoy: deliveryBoyId,
+      status: { $in: ['out_for_delivery', 'arriving'] }
+    }).session(session);
     
     if (!order) {
+      await session.abortTransaction();
       return ResponseHandler.error(res, 'Order not found', 404);
     }
     
+    // Verify OTP (optional)
+    if (order.deliveryInfo.otp && otp !== order.deliveryInfo.otp.code) {
+      await session.abortTransaction();
+      return ResponseHandler.error(res, 'Invalid OTP', 400);
+    }
+    
+    if (order.deliveryInfo.otp) {
+      order.deliveryInfo.otp.verified = true;
+    }
+    
+    // Update order
     order.status = 'delivered';
     order.timestamps.deliveredAt = new Date();
-    await order.save();
+    order._updatedBy = 'delivery_boy';
+    order.payment.status = order.payment.method === 'cod' ? 'paid' : order.payment.status;
+    order.payment.paidAt = new Date();
     
-    // Notify user
-    await PushNotificationService.sendToUser(
-      order.user._id,
-      'Order Delivered',
-      'Your order has been delivered successfully!'
+    // Update shop stats
+    await Shop.findByIdAndUpdate(
+      order.shop,
+      { 
+        $inc: { 
+          'orderStats.outForDelivery': -1,
+          'orderStats.delivered': 1,
+          'earnings.pending': order.payment.method === 'cod' ? -order.pricing.totalAmount : 0
+        }
+      },
+      { session }
     );
     
-    ResponseHandler.success(res, { order }, 'Order marked as delivered');
-  } catch (error) {
-    logger.error(`Mark delivered error: ${error.message}`);
-    ResponseHandler.error(res, error.message, 500);
-  }
-};
-
-// Get Order Tracking (For User)
-exports.getOrderTracking = async (req, res) => {
-  try {
-    const { orderId } = req.params;
+    // Update delivery boy stats
+    const shop = await Shop.findById(order.shop).session(session);
+    const deliveryBoy = shop.deliveryBoys.id(deliveryBoyId);
     
-    const order = await Order.findOne({
-      _id: orderId,
-      user: req.user._id
-    }).populate('shop deliveryPartner', 'name phone profilePicture logo');
-    
-    if (!order) {
-      return ResponseHandler.error(res, 'Order not found', 404);
+    if (deliveryBoy) {
+      // Remove order from assigned orders
+      deliveryBoy.assignedOrders = deliveryBoy.assignedOrders.filter(
+        order => order.toString() !== orderId
+      );
+      
+      // Update stats
+      deliveryBoy.totalDeliveries += 1;
+      deliveryBoy.earnings.today += order.pricing.deliveryFee;
+      deliveryBoy.earnings.weekly += order.pricing.deliveryFee;
+      deliveryBoy.earnings.monthly += order.pricing.deliveryFee;
+      deliveryBoy.earnings.total += order.pricing.deliveryFee;
+      
+      // Update status if no more assigned orders
+      if (deliveryBoy.assignedOrders.length === 0) {
+        deliveryBoy.status = 'active';
+      }
+      
+      await shop.save({ session });
     }
     
-    const trackingInfo = {
-      orderId: order.orderId,
-      status: order.status,
-      shop: order.shop,
-      deliveryPartner: order.deliveryPartner,
-      deliveryLocation: order.tracking.deliveryPartnerLocation,
-      distance: order.tracking.distance,
-      estimatedDeliveryTime: order.tracking.estimatedDeliveryTime,
-      timestamps: order.timestamps
-    };
+    // Update user stats
+    await User.findByIdAndUpdate(
+      order.user,
+      {
+        $inc: {
+          'orderStats.totalOrders': 1,
+          'orderStats.totalSpent': order.pricing.totalAmount,
+          'loyalty.points': Math.floor(order.pricing.totalAmount / 10) // 1 point per ₹10
+        }
+      },
+      { session }
+    );
     
-    ResponseHandler.success(res, trackingInfo, 'Tracking info fetched');
+    await order.save({ session });
+    await session.commitTransaction();
+    
+    // Send notifications
+    await PushNotificationService.sendToUser(
+      order.user,
+      'Order Delivered',
+      `Your order #${order.orderId} has been delivered successfully!`
+    );
+    
+    await PushNotificationService.sendToShop(
+      order.shop,
+      'Order Delivered',
+      `Order #${order.orderId} delivered successfully`
+    );
+    
+    ResponseHandler.success(res, { order }, 'Order delivered successfully');
+    
   } catch (error) {
-    logger.error(`Get order tracking error: ${error.message}`);
+    await session.abortTransaction();
+    logger.error(`Mark delivered error: ${error.message}`);
     ResponseHandler.error(res, error.message, 500);
+  } finally {
+    session.endSession();
   }
 };
 
+// ==================== CANCELLATION FLOW ====================
+
+// User Cancels Order
 exports.cancelOrder = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  
   try {
     const { orderId } = req.params;
     const { reason } = req.body;
+    const userId = req.user._id;
     
     const order = await Order.findOne({
       _id: orderId,
-      user: req.user._id
-    }).populate('shop deliveryPartner');
+      user: userId
+    }).session(session);
     
     if (!order) {
+      await session.abortTransaction();
       return ResponseHandler.error(res, 'Order not found', 404);
     }
     
     // Check if order can be cancelled
-    const cancellableStatuses = ['placed', 'accepted', 'preparing'];
+    const cancellableStatuses = ['pending', 'confirmed', 'preparing'];
     if (!cancellableStatuses.includes(order.status)) {
+      await session.abortTransaction();
       return ResponseHandler.error(
         res, 
-        'Order cannot be cancelled at this stage', 
+        `Order cannot be cancelled in ${order.status} status`, 
         400
       );
     }
     
-    // Restore product stock if order was accepted
-    if (order.status === 'accepted' || order.status === 'preparing') {
-      for (const item of order.items) {
-        await Product.findByIdAndUpdate(item.product, {
-          $inc: { 'stock.quantity': item.quantity }
-        });
-      }
+    // Restore product stock
+    for (const item of order.items) {
+      await Product.findByIdAndUpdate(
+        item.product,
+        { $inc: { 'stock.quantity': item.quantity } },
+        { session }
+      );
     }
     
+    // Update order
     order.status = 'cancelled';
-    order.cancelledBy = 'user';
-    order.cancellationReason = reason || 'Cancelled by user';
+    order.cancellation = {
+      requestedBy: 'user',
+      reason: reason,
+      refundAmount: order.payment.method !== 'cod' ? order.pricing.totalAmount : 0,
+      refundStatus: order.payment.method !== 'cod' ? 'pending' : 'not_applicable'
+    };
     order.timestamps.cancelledAt = new Date();
-    await order.save();
+    order._updatedBy = 'user';
     
-    // Notify shop
-    if (order.shop) {
-      await PushNotificationService.sendToUser(
-        order.shop._id,
-        'Order Cancelled',
-        `Order ${order.orderId} has been cancelled by the customer.`
-      );
-    }
+    // Update shop stats
+    await Shop.findByIdAndUpdate(
+      order.shop,
+      { 
+        $inc: { 
+          [`orderStats.${order.status}`]: -1,
+          'orderStats.cancelled': 1,
+          'earnings.pending': order.payment.method === 'cod' ? -order.pricing.totalAmount : 0,
+          'earnings.today': -order.pricing.totalAmount,
+          'earnings.weekly': -order.pricing.totalAmount,
+          'earnings.monthly': -order.pricing.totalAmount,
+          'earnings.total': -order.pricing.totalAmount
+        }
+      },
+      { session }
+    );
     
-    // Notify delivery partner if assigned
-    if (order.deliveryPartner) {
-      await PushNotificationService.sendToUser(
-        order.deliveryPartner._id,
-        'Delivery Cancelled',
-        `Delivery for order ${order.orderId} has been cancelled.`
-      );
-    }
-    
-    // Process refund if payment was made
-    if (order.paymentStatus === 'paid') {
-      order.paymentStatus = 'refunded';
+    // Process refund if online payment
+    if (order.payment.method !== 'cod' && order.payment.status === 'paid') {
+      order.payment.status = 'refunded';
+      order.payment.refundedAt = new Date();
+      order.cancellation.refundStatus = 'processed';
       // Add actual refund logic here
     }
     
-    await order.save();
+    await order.save({ session });
+    await session.commitTransaction();
+    
+    // Send notifications
+    await PushNotificationService.sendToShop(
+      order.shop,
+      'Order Cancelled',
+      `Order #${order.orderId} has been cancelled by customer. Reason: ${reason}`
+    );
+    
+    // Notify delivery boy if assigned
+    if (order.deliveryBoy) {
+      const shop = await Shop.findById(order.shop);
+      const deliveryBoy = shop.deliveryBoys.id(order.deliveryBoy);
+      
+      if (deliveryBoy) {
+        // Remove from assigned orders
+        deliveryBoy.assignedOrders = deliveryBoy.assignedOrders.filter(
+          o => o.toString() !== orderId
+        );
+        
+        if (deliveryBoy.assignedOrders.length === 0) {
+          deliveryBoy.status = 'active';
+        }
+        
+        await shop.save();
+        
+        await PushNotificationService.sendToDeliveryBoy(
+          order.deliveryBoy,
+          order.shop,
+          'Delivery Cancelled',
+          `Delivery for order #${order.orderId} has been cancelled.`
+        );
+      }
+    }
     
     ResponseHandler.success(res, { order }, 'Order cancelled successfully');
+    
   } catch (error) {
+    await session.abortTransaction();
     logger.error(`Cancel order error: ${error.message}`);
     ResponseHandler.error(res, error.message, 500);
+  } finally {
+    session.endSession();
   }
 };
 
-// Get Shop Pending Orders
-exports.getShopPendingOrders = async (req, res) => {
+// Shop Cancels Order
+exports.shopCancelOrder = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  
   try {
+    const { orderId } = req.params;
+    const { reason } = req.body;
     const shopId = req.user._id;
-    const { status = 'placed' } = req.query;
     
-    const query = { shop: shopId };
+    const order = await Order.findOne({
+      _id: orderId,
+      shop: shopId,
+      status: { $in: ['confirmed', 'preparing', 'ready'] }
+    }).session(session);
     
-    // Filter by status if provided
+    if (!order) {
+      await session.abortTransaction();
+      return ResponseHandler.error(res, 'Order not found or cannot be cancelled', 404);
+    }
+    
+    // Restore product stock
+    for (const item of order.items) {
+      await Product.findByIdAndUpdate(
+        item.product,
+        { $inc: { 'stock.quantity': item.quantity } },
+        { session }
+      );
+    }
+    
+    // Update order
+    order.status = 'cancelled';
+    order.cancellation = {
+      requestedBy: 'shop',
+      reason: reason,
+      refundAmount: order.payment.method !== 'cod' ? order.pricing.totalAmount : 0,
+      refundStatus: order.payment.method !== 'cod' ? 'pending' : 'not_applicable'
+    };
+    order.timestamps.cancelledAt = new Date();
+    order._updatedBy = 'shop';
+    
+    // Update shop stats
+    await Shop.findByIdAndUpdate(
+      shopId,
+      { 
+        $inc: { 
+          [`orderStats.${order.status}`]: -1,
+          'orderStats.cancelled': 1,
+          'earnings.pending': order.payment.method === 'cod' ? -order.pricing.totalAmount : 0,
+          'earnings.today': -order.pricing.totalAmount,
+          'earnings.weekly': -order.pricing.totalAmount,
+          'earnings.monthly': -order.pricing.totalAmount,
+          'earnings.total': -order.pricing.totalAmount
+        }
+      },
+      { session }
+    );
+    
+    // Process refund
+    if (order.payment.method !== 'cod' && order.payment.status === 'paid') {
+      order.payment.status = 'refunded';
+      order.payment.refundedAt = new Date();
+      order.cancellation.refundStatus = 'processed';
+    }
+    
+    await order.save({ session });
+    await session.commitTransaction();
+    
+    // Send notifications
+    await PushNotificationService.sendToUser(
+      order.user,
+      'Order Cancelled',
+      `Shop cancelled your order #${order.orderId}. Reason: ${reason}. Amount will be refunded if paid online.`
+    );
+    
+    // Notify delivery boy if assigned
+    if (order.deliveryBoy) {
+      const shop = await Shop.findById(shopId);
+      const deliveryBoy = shop.deliveryBoys.id(order.deliveryBoy);
+      
+      if (deliveryBoy) {
+        deliveryBoy.assignedOrders = deliveryBoy.assignedOrders.filter(
+          o => o.toString() !== orderId
+        );
+        
+        if (deliveryBoy.assignedOrders.length === 0) {
+          deliveryBoy.status = 'active';
+        }
+        
+        await shop.save();
+      }
+    }
+    
+    ResponseHandler.success(res, { order }, 'Order cancelled successfully');
+    
+  } catch (error) {
+    await session.abortTransaction();
+    logger.error(`Shop cancel order error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  } finally {
+    session.endSession();
+  }
+};
+
+// ==================== ORDER MANAGEMENT ====================
+
+// Get User Orders
+exports.getUserOrders = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { 
+      status, 
+      page = 1, 
+      limit = 20,
+      sortBy = 'createdAt',
+      sortOrder = 'desc'
+    } = req.query;
+    
+    const query = { user: userId };
+    
     if (status) {
       if (status === 'active') {
-        query.status = { 
-          $in: ['placed', 'accepted', 'preparing', 'packed', 'searching-delivery', 'out-for-delivery'] 
-        };
+        query.status = { $in: ['pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'arriving'] };
+      } else if (status === 'completed') {
+        query.status = { $in: ['delivered', 'cancelled', 'rejected'] };
       } else {
         query.status = status;
       }
     }
     
-    const orders = await Order.find(query)
-      .populate('user', 'name phone profilePicture')
-      .populate('deliveryPartner', 'name phone')
-      .populate('items.product', 'name images')
-      .sort({ createdAt: -1 })
-      .limit(50);
-    
-    const counts = {
-      placed: await Order.countDocuments({ shop: shopId, status: 'placed' }),
-      accepted: await Order.countDocuments({ shop: shopId, status: 'accepted' }),
-      preparing: await Order.countDocuments({ shop: shopId, status: 'preparing' }),
-      packed: await Order.countDocuments({ shop: shopId, status: 'packed' }),
-      completed: await Order.countDocuments({ shop: shopId, status: 'delivered' })
-    };
-    
-    ResponseHandler.success(res, { orders, counts }, 'Orders fetched successfully');
-  } catch (error) {
-    logger.error(`Get shop pending orders error: ${error.message}`);
-    ResponseHandler.error(res, error.message, 500);
-  }
-};
-
-// Get Pending Deliveries (For Delivery Partners)
-exports.getPendingDeliveries = async (req, res) => {
-  try {
-    const partnerId = req.user._id;
-    
-    // Get orders where this partner was notified and response is pending
-    const pendingOrders = await Order.find({
-      'notifiedDeliveryPartners.partner': partnerId,
-      'notifiedDeliveryPartners.response': 'pending',
-      status: 'searching-delivery'
-    })
-      .populate('shop', 'name address phone logo')
-      .populate('user', 'name phone')
-      .populate('items.product', 'name images')
-      .sort({ 'notifiedDeliveryPartners.notifiedAt': -1 })
-      .limit(20);
-    
-    // Get active deliveries for this partner
-    const activeDeliveries = await Order.find({
-      deliveryPartner: partnerId,
-      status: { $in: ['out-for-delivery'] }
-    })
-      .populate('shop', 'name address phone logo')
-      .populate('user', 'name phone')
-      .populate('items.product', 'name images')
-      .sort({ 'timestamps.outForDeliveryAt': -1 });
-    
-    // Get completed deliveries (recent)
-    const completedDeliveries = await Order.find({
-      deliveryPartner: partnerId,
-      status: 'delivered'
-    })
-      .populate('shop', 'name address logo')
-      .populate('user', 'name')
-      .sort({ 'timestamps.deliveredAt': -1 })
-      .limit(10);
-    
-    const stats = {
-      pending: pendingOrders.length,
-      active: activeDeliveries.length,
-      completedToday: await Order.countDocuments({
-        deliveryPartner: partnerId,
-        status: 'delivered',
-        'timestamps.deliveredAt': {
-          $gte: new Date(new Date().setHours(0, 0, 0, 0))
-        }
-      })
-    };
-    
-    ResponseHandler.success(res, {
-      pending: pendingOrders,
-      active: activeDeliveries,
-      completed: completedDeliveries,
-      stats
-    }, 'Deliveries fetched successfully');
-  } catch (error) {
-    logger.error(`Get pending deliveries error: ${error.message}`);
-    ResponseHandler.error(res, error.message, 500);
-  }
-};
-
-// Get Order Details (General - for any role)
-exports.getOrderDetails = async (req, res) => {
-  try {
-    const { orderId } = req.params;
-    const userId = req.user._id;
-    const userRole = req.user.role;
-    
-    let query = { _id: orderId };
-    
-    // Filter based on role
-    if (userRole === 'user') {
-      query.user = userId;
-    } else if (userRole === 'shop') {
-      query.shop = userId;
-    } else if (userRole === 'provider') {
-      query.deliveryPartner = userId;
-    }
-    
-    const order = await Order.findOne(query)
-      .populate('user', 'name phone email profilePicture')
-      .populate('shop', 'name phone address logo')
-      .populate('deliveryPartner', 'name phone profilePicture')
-      .populate('items.product', 'name images category');
-    
-    if (!order) {
-      return ResponseHandler.error(res, 'Order not found', 404);
-    }
-    
-    ResponseHandler.success(res, { order }, 'Order details fetched successfully');
-  } catch (error) {
-    logger.error(`Get order details error: ${error.message}`);
-    ResponseHandler.error(res, error.message, 500);
-  }
-};
-
-// Get User Orders (Order History)
-exports.getUserOrders = async (req, res) => {
-  try {
-    const userId = req.user._id;
-    const { status, page = 1, limit = 20 } = req.query;
-    
-    const query = { user: userId };
-    
-    if (status) {
-      query.status = status;
-    }
-    
     const skip = (page - 1) * limit;
+    const sort = { [sortBy]: sortOrder === 'desc' ? -1 : 1 };
     
     const orders = await Order.find(query)
-      .populate('shop', 'name logo address')
-      .populate('deliveryPartner', 'name phone')
-      .populate('items.product', 'name images')
-      .sort({ createdAt: -1 })
+      .populate('shop', 'name logo address rating')
+      .populate('deliveryBoy', 'name phone vehicle')
+      .sort(sort)
       .skip(skip)
       .limit(parseInt(limit));
     
     const total = await Order.countDocuments(query);
     
-    const statusCounts = {
-      active: await Order.countDocuments({
-        user: userId,
-        status: { $in: ['placed', 'accepted', 'preparing', 'packed', 'searching-delivery', 'out-for-delivery'] }
+    // Get order statistics
+    const stats = {
+      total: await Order.countDocuments({ user: userId }),
+      active: await Order.countDocuments({ 
+        user: userId, 
+        status: { $in: ['pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'arriving'] } 
       }),
-      completed: await Order.countDocuments({ user: userId, status: 'delivered' }),
+      delivered: await Order.countDocuments({ user: userId, status: 'delivered' }),
       cancelled: await Order.countDocuments({ user: userId, status: 'cancelled' })
     };
     
     ResponseHandler.success(res, {
       orders,
       pagination: {
-        current: parseInt(page),
-        total: Math.ceil(total / limit),
-        count: total
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / limit)
       },
-      statusCounts
+      stats
     }, 'Orders fetched successfully');
+    
   } catch (error) {
     logger.error(`Get user orders error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// Get Shop Orders
+// Get Shop Orders
+exports.getShopOrders = async (req, res) => {
+  try {
+    const shopId = req.user._id;
+
+    const { 
+      status, 
+      page = 1, 
+      limit = 20,
+      dateFrom,
+      dateTo,
+      search
+    } = req.query;
+    
+    const query = { shop: shopId };
+    
+    // Status filter - Map UI status to backend status
+    if (status && status !== 'all') {
+      switch(status) {
+        case 'pending':
+          query.status = 'pending';
+          break;
+        case 'accepted':
+        case 'confirmed': // Map 'accepted' to 'confirmed'
+          query.status = 'confirmed';
+          break;
+        case 'preparing':
+          query.status = 'preparing';
+          break;
+        case 'ready':
+          query.status = 'ready';
+          break;
+        case 'packed':
+          query.status = 'packed';
+          break;
+        case 'out_for_delivery':
+          query.status = 'out_for_delivery';
+          break;
+        case 'delivered':
+          query.status = 'delivered';
+          break;
+        case 'cancelled':
+          query.status = { $in: ['cancelled', 'rejected'] };
+          break;
+        default:
+          query.status = status;
+      }
+    }
+    
+    // Date range filter
+    if (dateFrom || dateTo) {
+      query.createdAt = {};
+      if (dateFrom) query.createdAt.$gte = new Date(dateFrom);
+      if (dateTo) query.createdAt.$lte = new Date(dateTo);
+    }
+    
+    // Search filter
+    if (search) {
+      query.$or = [
+        { orderId: { $regex: search, $options: 'i' } },
+        { 'customerInfo.name': { $regex: search, $options: 'i' } },
+        { 'customerInfo.phone': { $regex: search, $options: 'i' } }
+      ];
+    }
+    
+    const skip = (page - 1) * limit;
+
+    // Fetch orders
+    const orders = await Order.find(query)
+      .select('+deliveryAddress')
+      .populate('user', 'name phone profilePicture')
+      .populate('deliveryBoy', 'name phone vehicle')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean();
+    
+    const total = await Order.countDocuments(query);
+
+    // Get shop stats for counts
+    const stats = await Order.aggregate([
+      { $match: { shop: shopId } },
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    // Convert stats to object
+    const statsObj = {};
+    let allCount = 0;
+    
+    stats.forEach(item => {
+      statsObj[item._id] = item.count;
+      allCount += item.count;
+    });
+
+    // Add 'all' count
+    statsObj.all = allCount;
+
+    ResponseHandler.success(res, {
+      orders,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / limit)
+      },
+      stats: statsObj
+    }, 'Orders fetched successfully');
+
+  } catch (error) {
+    logger.error(`Get shop orders error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// Get Order Details
+exports.getOrderDetails = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const userId = req.user._id;
+    const userRole = req.user.role;
+
+    let query = { _id: orderId };
+
+    if (userRole === 'user') query.user = userId;
+    if (userRole === 'shop') query.shop = userId;
+    if (userRole === 'delivery_boy') query.deliveryBoy = userId;
+
+    const order = await Order.findOne(query)
+      .populate('user', 'name phone email profilePicture')
+      .populate('shop', 'name phone address logo rating deliveryBoys')
+      .populate('items.product', 'name images category');
+
+    if (!order) {
+      return ResponseHandler.error(res, "Order not found", 404);
+    }
+
+    //-----------------------------
+    // 🔥 FIND DELIVERY BOY FROM SHOP
+    //-----------------------------
+    let assignedBoy = null;
+
+    if (order.deliveryBoy && order.shop?.deliveryBoys?.length) {
+      assignedBoy = order.shop.deliveryBoys.find(
+        (boy) => boy._id.toString() === order.deliveryBoy.toString()
+      );
+    }
+
+    //-----------------------------
+    // 🔥 Delivery Address
+    //-----------------------------
+    const deliveryAddress = order.deliveryInfo
+      ? {
+          house: order.deliveryInfo.house,
+          area: order.deliveryInfo.area,
+          city: order.deliveryInfo.city,
+          pincode: order.deliveryInfo.pincode,
+          coordinates: order.deliveryInfo.coordinates || null,
+        }
+      : null;
+
+    //-----------------------------
+    // 🔥 Delivery Boy Full Data
+    //-----------------------------
+    const deliveryBoy = assignedBoy
+      ? {
+          _id: assignedBoy._id,
+          name: assignedBoy.name,
+          phone: assignedBoy.phone,
+          vehicle: assignedBoy.vehicle,
+          profilePicture: assignedBoy.profilePicture,
+
+          location: order.tracking?.deliveryBoyLocation || null,
+          distance: order.tracking?.distance?.boyToUser || null,
+        }
+      : null;
+
+    //-----------------------------
+    // 🔥 Final Response
+    //-----------------------------
+    const orderData = {
+      orderId: order.orderId,
+      status: order.status,
+      paymentStatus: order.paymentStatus,
+      paymentMethod: order.paymentMethod,
+
+      items: order.items,
+      shop: order.shop,
+      user: order.user,
+
+      deliveryAddress,
+      deliveryBoy,
+
+      timestamps: order.timestamps,
+      estimatedDeliveryTime: order.tracking?.estimatedDeliveryTime || null,
+      tracking: order.tracking || null,
+    };
+
+    ResponseHandler.success(res, orderData, "Order details fetched successfully");
+
+  } catch (error) {
+    logger.error(`Get order details error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// Get Order Tracking
+exports.getOrderTracking = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const userId = req.user._id;
+
+    // Fetch order + shop (including deliveryBoys)
+    const order = await Order.findOne({
+      _id: orderId,
+      user: userId
+    })
+      .populate('shop', 'name logo phone address deliveryBoys')
+      .populate('deliveryBoy', 'name phone vehicle profilePicture'); // in case you also store global deliveryBoy
+
+    if (!order) {
+      return ResponseHandler.error(res, 'Order not found', 404);
+    }
+
+    //----------------------------------------------------
+    // 1️⃣ FIND EMBEDDED SHOP DELIVERY BOY
+    //----------------------------------------------------
+    let assignedBoy = null;
+
+    if (order.deliveryBoy) {
+      // Match embedded deliveryBoy of shop
+      assignedBoy = order.shop?.deliveryBoys?.find(
+        (boy) => boy._id.toString() === order.deliveryBoy.toString()
+      );
+    }
+
+    //----------------------------------------------------
+    // 2️⃣ BUILD RESPONSE
+    //----------------------------------------------------
+    const trackingInfo = {
+      orderId: order.orderId,
+      status: order.status,
+
+      shop: {
+        name: order.shop?.name,
+        phone: order.shop?.phone,
+        address: order.shop?.address,
+        location: order.tracking?.shopLocation
+      },
+
+      deliveryBoy: assignedBoy
+        ? {
+            _id: assignedBoy._id,
+            name: assignedBoy.name,
+            phone: assignedBoy.phone,
+            vehicle: assignedBoy.vehicle,
+            profilePicture: assignedBoy.profilePicture,
+            location: order.tracking?.deliveryBoyLocation,
+            distance: order.tracking?.distance?.boyToUser
+          }
+        : null,
+
+      estimatedDeliveryTime: order.tracking?.estimatedDeliveryTime,
+      timestamps: order.timestamps,
+      statusHistory: order.statusHistory,
+      deliveryInfo: order.deliveryInfo
+    };
+
+    //----------------------------------------------------
+    // 3️⃣ SEND SUCCESS
+    //----------------------------------------------------
+    ResponseHandler.success(res, trackingInfo, 'Tracking info fetched successfully');
+
+  } catch (error) {
+    logger.error(`Get order tracking error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+
+// ==================== DELIVERY BOY ROUTES ====================
+
+// Get Delivery Boy's Active Orders
+exports.getDeliveryBoyOrders = async (req, res) => {
+  try {
+    const deliveryBoyId = req.user._id;
+    const shopId = req.user.shop; // Assuming delivery boy has shop reference
+    
+    const shop = await Shop.findById(shopId);
+    const deliveryBoy = shop.deliveryBoys.id(deliveryBoyId);
+    
+    if (!deliveryBoy) {
+      return ResponseHandler.error(res, 'Delivery boy not found', 404);
+    }
+    
+    const activeOrders = await Order.find({
+      _id: { $in: deliveryBoy.assignedOrders },
+      status: { $in: ['ready', 'out_for_delivery', 'arriving'] }
+    })
+    .populate('user', 'name phone')
+    .populate('shop', 'name address phone')
+    .sort({ 'timestamps.readyAt': 1 });
+    
+    const completedToday = await Order.countDocuments({
+      deliveryBoy: deliveryBoyId,
+      status: 'delivered',
+      'timestamps.deliveredAt': {
+        $gte: new Date(new Date().setHours(0, 0, 0, 0))
+      }
+    });
+    
+    ResponseHandler.success(res, {
+      activeOrders,
+      stats: {
+        assigned: deliveryBoy.assignedOrders.length,
+        completedToday,
+        totalDeliveries: deliveryBoy.totalDeliveries,
+        earnings: deliveryBoy.earnings
+      }
+    }, 'Orders fetched successfully');
+    
+  } catch (error) {
+    logger.error(`Get delivery boy orders error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// Delivery Boy Update Status
+exports.updateDeliveryBoyStatus = async (req, res) => {
+  try {
+    const { status } = req.body;
+    const deliveryBoyId = req.user._id;
+    const shopId = req.user.shop;
+    
+    const validStatuses = ['active', 'inactive', 'offline'];
+    if (!validStatuses.includes(status)) {
+      return ResponseHandler.error(res, 'Invalid status', 400);
+    }
+    
+    const shop = await Shop.findById(shopId);
+    const deliveryBoy = shop.deliveryBoys.id(deliveryBoyId);
+    
+    if (!deliveryBoy) {
+      return ResponseHandler.error(res, 'Delivery boy not found', 404);
+    }
+    
+    deliveryBoy.status = status;
+    await shop.save();
+    
+    ResponseHandler.success(res, { status: deliveryBoy.status }, 'Status updated');
+    
+  } catch (error) {
+    logger.error(`Update delivery boy status error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// ==================== HELPER FUNCTIONS ====================
+
+// Check if shop has accepted order (called after timeout)
+async function checkShopAcceptance(orderId) {
+  try {
+    const order = await Order.findById(orderId);
+    
+    if (!order || order.status !== 'pending') {
+      return;
+    }
+    
+    // Order still pending after 5 minutes
+    // We don't auto-cancel, just send reminder to shop
+    await PushNotificationService.sendToShop(
+      order.shop,
+      'Order Reminder',
+      `Order #${order.orderId} is still pending. Please accept or reject.`,
+      {
+        orderId: order._id,
+        type: 'reminder'
+      }
+    );
+    
+    // Send notification to user
+    await PushNotificationService.sendToUser(
+      order.user,
+      'Order Status',
+      'Shop is still processing your order. You can cancel if taking too long.'
+    );
+    
+  } catch (error) {
+    logger.error(`Check shop acceptance error: ${error.message}`);
+  }
+}
+
+// Get Available Shops for User Location
+exports.getAvailableShops = async (req, res) => {
+  try {
+    const { latitude, longitude, category, search } = req.query;
+    
+    if (!latitude || !longitude) {
+      return ResponseHandler.error(res, 'Location required', 400);
+    }
+    
+    const userLocation = {
+      type: 'Point',
+      coordinates: [parseFloat(longitude), parseFloat(latitude)]
+    };
+    
+    // Find shops within 10km radius
+    const shops = await Shop.find({
+      isActive: true,
+      isOpen: true,
+      verificationStatus: 'approved',
+      'address.location': {
+        $near: {
+          $geometry: userLocation,
+          $maxDistance: 10000 // 10km
+        }
+      }
+    })
+    .select('name logo address deliverySettings ratings categories workingHours isShopOpenNow')
+    .lean();
+    
+    // Calculate distance and delivery time for each shop
+    const shopsWithDetails = shops.map(shop => {
+      const distance = GeoService.calculateDistance(
+        latitude,
+        longitude,
+        shop.address.location.coordinates[1],
+        shop.address.location.coordinates[0]
+      );
+      
+      const deliveryFee = calculateDeliveryFee(shop, distance, 0);
+      const deliveryTime = shop.deliverySettings.estimatedDeliveryTime;
+      
+      return {
+        ...shop,
+        distance: parseFloat(distance.toFixed(1)),
+        deliveryFee,
+        deliveryTime: `${deliveryTime.min}-${deliveryTime.max} min`,
+        isOpen: shop.isShopOpenNow ? shop.isShopOpenNow() : false
+      };
+    });
+    
+    // Filter by category if provided
+    let filteredShops = shopsWithDetails;
+    if (category) {
+      filteredShops = shopsWithDetails.filter(shop => 
+        shop.categories.includes(category)
+      );
+    }
+    
+    // Filter by search if provided
+    if (search) {
+      filteredShops = shopsWithDetails.filter(shop => 
+        shop.name.toLowerCase().includes(search.toLowerCase())
+      );
+    }
+    
+    // Sort by distance
+    filteredShops.sort((a, b) => a.distance - b.distance);
+    
+    ResponseHandler.success(res, { shops: filteredShops }, 'Shops fetched successfully');
+    
+  } catch (error) {
+    logger.error(`Get available shops error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// ==================== ADMIN ORDER MANAGEMENT ====================
+
+// Get all orders with filters
+exports.getAllOrders = async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 50,
+      status,
+      shopId,
+      userId,
+      deliveryBoyId,
+      paymentMethod,
+      paymentStatus,
+      dateFrom,
+      dateTo,
+      search,
+      sortBy = 'createdAt',
+      sortOrder = 'desc'
+    } = req.query;
+
+    const query = {};
+
+    // Filters
+    if (status) query.status = status;
+    if (shopId) query.shop = shopId;
+    if (userId) query.user = userId;
+    if (deliveryBoyId) query.deliveryBoy = deliveryBoyId;
+    if (paymentMethod) query['payment.method'] = paymentMethod;
+    if (paymentStatus) query['payment.status'] = paymentStatus;
+
+    // Date range filter
+    if (dateFrom || dateTo) {
+      query.createdAt = {};
+      if (dateFrom) query.createdAt.$gte = new Date(dateFrom);
+      if (dateTo) query.createdAt.$lte = new Date(dateTo);
+    }
+
+    // Search filter
+    if (search) {
+      query.$or = [
+        { orderId: { $regex: search, $options: 'i' } },
+        { 'customerInfo.name': { $regex: search, $options: 'i' } },
+        { 'customerInfo.phone': { $regex: search, $options: 'i' } },
+        { 'customerInfo.email': { $regex: search, $options: 'i' } },
+        { 'shopInfo.name': { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    const skip = (page - 1) * limit;
+    const sort = { [sortBy]: sortOrder === 'desc' ? -1 : 1 };
+
+    // Get orders with population
+    const orders = await Order.find(query)
+      .populate('user', 'name phone email profilePicture')
+      .populate('shop', 'name logo phone address verificationStatus')
+      .populate('deliveryBoy', 'name phone vehicle')
+      .sort(sort)
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean();
+
+    // Get total count
+    const total = await Order.countDocuments(query);
+
+    // Get aggregated statistics
+    const stats = await Order.aggregate([
+      { $match: query },
+      {
+        $group: {
+          _id: null,
+          totalOrders: { $sum: 1 },
+          totalRevenue: { $sum: '$pricing.totalAmount' },
+          totalItems: { $sum: { $size: '$items' } },
+          avgOrderValue: { $avg: '$pricing.totalAmount' }
+        }
+      }
+    ]);
+
+    // Get status-wise counts
+    const statusCounts = await Order.aggregate([
+      { $match: query },
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 },
+          revenue: { $sum: '$pricing.totalAmount' }
+        }
+      },
+      { $sort: { count: -1 } }
+    ]);
+
+    // Get daily orders for last 30 days
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const dailyStats = await Order.aggregate([
+      {
+        $match: {
+          ...query,
+          createdAt: { $gte: thirtyDaysAgo }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            $dateToString: { format: '%Y-%m-%d', date: '$createdAt' }
+          },
+          orders: { $sum: 1 },
+          revenue: { $sum: '$pricing.totalAmount' },
+          items: { $sum: { $size: '$items' } }
+        }
+      },
+      { $sort: { '_id': 1 } }
+    ]);
+
+    ResponseHandler.success(res, {
+      orders,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / limit)
+      },
+      stats: stats[0] || {
+        totalOrders: 0,
+        totalRevenue: 0,
+        totalItems: 0,
+        avgOrderValue: 0
+      },
+      statusCounts,
+      dailyStats,
+      filters: {
+        status,
+        shopId,
+        userId,
+        dateFrom,
+        dateTo,
+        search
+      }
+    }, 'Orders fetched successfully');
+
+  } catch (error) {
+    logger.error(`Get all orders error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// Get order details for admin
+exports.getOrderDetails = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+
+    const order = await Order.findById(orderId)
+      .populate('user', 'name phone email profilePicture addresses')
+      .populate('shop', 'name logo phone address taxInfo owner')
+      .populate('deliveryBoy', 'name phone vehicle profilePicture rating')
+      .populate('items.product', 'name images category weight brand');
+
+    if (!order) {
+      return ResponseHandler.error(res, 'Order not found', 404);
+    }
+
+    // Get detailed timeline
+    const timeline = [];
+    if (order.timestamps.placedAt) timeline.push({ action: 'Order Placed', time: order.timestamps.placedAt });
+    if (order.timestamps.confirmedAt) timeline.push({ action: 'Shop Confirmed', time: order.timestamps.confirmedAt });
+    if (order.timestamps.preparingAt) timeline.push({ action: 'Preparing Started', time: order.timestamps.preparingAt });
+    if (order.timestamps.readyAt) timeline.push({ action: 'Order Ready', time: order.timestamps.readyAt });
+    if (order.timestamps.pickedUpAt) timeline.push({ action: 'Picked Up', time: order.timestamps.pickedUpAt });
+    if (order.timestamps.arrivingAt) timeline.push({ action: 'Arriving Soon', time: order.timestamps.arrivingAt });
+    if (order.timestamps.deliveredAt) timeline.push({ action: 'Delivered', time: order.timestamps.deliveredAt });
+    if (order.timestamps.cancelledAt) timeline.push({ action: 'Cancelled', time: order.timestamps.cancelledAt });
+    if (order.timestamps.rejectedAt) timeline.push({ action: 'Rejected', time: order.timestamps.rejectedAt });
+
+    // Get status history
+    const statusHistory = order.statusHistory || [];
+
+    // Get payment history if available
+    const paymentHistory = order.payment.history || [];
+
+    // Get location tracking points
+    const locationHistory = order.tracking.locationHistory || [];
+
+    // Get shop delivery boy info
+    let assignedDeliveryBoy = null;
+    if (order.deliveryBoy && order.shop) {
+      const shop = await Shop.findById(order.shop._id);
+      if (shop && shop.deliveryBoys) {
+        assignedDeliveryBoy = shop.deliveryBoys.find(
+          boy => boy._id.toString() === order.deliveryBoy._id.toString()
+        );
+      }
+    }
+
+    // Calculate metrics
+    const metrics = {
+      preparationTime: order.timestamps.readyAt && order.timestamps.confirmedAt
+        ? (order.timestamps.readyAt - order.timestamps.confirmedAt) / (1000 * 60) // minutes
+        : null,
+      deliveryTime: order.timestamps.deliveredAt && order.timestamps.pickedUpAt
+        ? (order.timestamps.deliveredAt - order.timestamps.pickedUpAt) / (1000 * 60) // minutes
+        : null,
+      totalTime: order.timestamps.deliveredAt && order.timestamps.placedAt
+        ? (order.timestamps.deliveredAt - order.timestamps.placedAt) / (1000 * 60) // minutes
+        : null
+    };
+
+    const detailedOrder = {
+      _id: order._id,
+      orderId: order.orderId,
+      status: order.status,
+      source: order.source,
+      deviceInfo: order.deviceInfo,
+
+      user: order.user,
+      shop: order.shop,
+      deliveryBoy: assignedDeliveryBoy || order.deliveryBoy,
+
+      items: order.items.map(item => ({
+        ...item,
+        product: item.product || { _id: item.product }
+      })),
+
+      deliveryAddress: order.deliveryAddress,
+      deliveryInfo: order.deliveryInfo,
+
+      pricing: order.pricing,
+      payment: order.payment,
+
+      timeline,
+      statusHistory,
+      paymentHistory,
+      locationHistory,
+
+      tracking: order.tracking,
+      notes: order.notes,
+      cancellation: order.cancellation,
+      rejection: order.rejection,
+
+      timestamps: order.timestamps,
+      metrics,
+      _updatedBy: order._updatedBy,
+      _updatedAt: order._updatedAt
+    };
+
+    ResponseHandler.success(res, detailedOrder, 'Order details fetched successfully');
+
+  } catch (error) {
+    logger.error(`Get admin order details error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// Update order status (admin override)
+exports.updateOrder = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { orderId } = req.params;
+    const {
+      status,
+      deliveryBoyId,
+      deliveryFee,
+      discountAmount,
+      note,
+      notifyUser = true,
+      notifyShop = true,
+      notifyDeliveryBoy = true
+    } = req.body;
+
+    const order = await Order.findById(orderId).session(session);
+    if (!order) {
+      await session.abortTransaction();
+      return ResponseHandler.error(res, 'Order not found', 404);
+    }
+
+    // Validate status transition
+    const validTransitions = {
+      pending: ['confirmed', 'rejected', 'cancelled'],
+      confirmed: ['preparing', 'ready', 'cancelled'],
+      preparing: ['ready', 'cancelled'],
+      ready: ['out_for_delivery', 'cancelled'],
+      out_for_delivery: ['arriving', 'delivered', 'cancelled'],
+      arriving: ['delivered', 'cancelled']
+    };
+
+    if (status && status !== order.status) {
+      const allowed = validTransitions[order.status];
+      if (!allowed || !allowed.includes(status)) {
+        await session.abortTransaction();
+        return ResponseHandler.error(
+          res,
+          `Cannot transition from ${order.status} to ${status}`,
+          400
+        );
+      }
+
+      // Update status
+      order.status = status;
+      order.statusHistory = order.statusHistory || [];
+      order.statusHistory.push({
+        status,
+        changedBy: 'admin',
+        changedAt: new Date(),
+        note
+      });
+
+      // Update timestamps
+      const timestampMap = {
+        confirmed: 'confirmedAt',
+        preparing: 'preparingAt',
+        ready: 'readyAt',
+        out_for_delivery: 'outForDeliveryAt',
+        arriving: 'arrivingAt',
+        delivered: 'deliveredAt',
+        cancelled: 'cancelledAt',
+        rejected: 'rejectedAt'
+      };
+
+      if (timestampMap[status]) {
+        order.timestamps[timestampMap[status]] = new Date();
+      }
+    }
+
+    // Update delivery boy
+    if (deliveryBoyId && deliveryBoyId !== order.deliveryBoy?.toString()) {
+      const shop = await Shop.findById(order.shop).session(session);
+      const deliveryBoy = shop.deliveryBoys.id(deliveryBoyId);
+
+      if (!deliveryBoy) {
+        await session.abortTransaction();
+        return ResponseHandler.error(res, 'Delivery boy not found', 404);
+      }
+
+      // Remove from previous delivery boy if exists
+      if (order.deliveryBoy) {
+        const prevShop = await Shop.findById(order.shop).session(session);
+        const prevBoy = prevShop.deliveryBoys.id(order.deliveryBoy);
+        if (prevBoy) {
+          prevBoy.assignedOrders = prevBoy.assignedOrders.filter(
+            id => id.toString() !== orderId
+          );
+          await prevShop.save({ session });
+        }
+      }
+
+      // Assign to new delivery boy
+      deliveryBoy.assignedOrders.push(order._id);
+      deliveryBoy.status = 'busy';
+      await shop.save({ session });
+
+      order.deliveryBoy = deliveryBoyId;
+    }
+
+    // Update pricing
+    if (deliveryFee !== undefined) {
+      order.pricing.deliveryFee = deliveryFee;
+      order.pricing.subtotal = order.pricing.itemsTotal +
+        order.pricing.tax +
+        deliveryFee +
+        order.pricing.packagingCharge -
+        order.pricing.discount.amount +
+        order.pricing.tip;
+      order.pricing.totalAmount = order.pricing.subtotal;
+    }
+
+    if (discountAmount !== undefined) {
+      order.pricing.discount.amount = discountAmount;
+      order.pricing.subtotal = order.pricing.itemsTotal +
+        order.pricing.tax +
+        order.pricing.deliveryFee +
+        order.pricing.packagingCharge -
+        discountAmount +
+        order.pricing.tip;
+      order.pricing.totalAmount = order.pricing.subtotal;
+    }
+
+    order._updatedBy = 'admin';
+    order._updatedAt = new Date();
+
+    await order.save({ session });
+    await session.commitTransaction();
+
+    // Send notifications
+    if (notifyUser && order.user) {
+      PushNotificationService.sendToUser(
+        order.user,
+        'Order Updated',
+        `Your order #${order.orderId} has been updated. New status: ${status || 'updated'}`,
+        { orderId: order._id, status: order.status }
+      ).catch(err => logger.error(err));
+    }
+
+    if (notifyShop && order.shop) {
+      PushNotificationService.sendToShop(
+        order.shop,
+        'Order Updated by Admin',
+        `Order #${order.orderId} has been updated.`,
+        { orderId: order._id, status: order.status }
+      ).catch(err => logger.error(err));
+    }
+
+    if (notifyDeliveryBoy && order.deliveryBoy && deliveryBoyId) {
+      PushNotificationService.sendToDeliveryBoy(
+        order.deliveryBoy,
+        order.shop,
+        'New Delivery Assignment',
+        `You have been assigned order #${order.orderId}`,
+        { orderId: order._id, shopId: order.shop }
+      ).catch(err => logger.error(err));
+    }
+
+    const updatedOrder = await Order.findById(orderId)
+      .populate('user', 'name phone')
+      .populate('shop', 'name logo')
+      .populate('deliveryBoy', 'name phone');
+
+    ResponseHandler.success(res, { order: updatedOrder }, 'Order updated successfully');
+
+  } catch (error) {
+    await session.abortTransaction();
+    logger.error(`Update order error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  } finally {
+    session.endSession();
+  }
+};
+
+// Admin cancel order
+exports.cancelOrder = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { orderId } = req.params;
+    const { reason, refund = true, notify = true } = req.body;
+
+    const order = await Order.findById(orderId).session(session);
+    if (!order) {
+      await session.abortTransaction();
+      return ResponseHandler.error(res, 'Order not found', 404);
+    }
+
+    // Check if order can be cancelled
+    if (['delivered', 'cancelled', 'rejected'].includes(order.status)) {
+      await session.abortTransaction();
+      return ResponseHandler.error(
+        res,
+        `Order cannot be cancelled in ${order.status} status`,
+        400
+      );
+    }
+
+    // Restore product stock
+    for (const item of order.items) {
+      await Product.findByIdAndUpdate(
+        item.product,
+        { $inc: { 'stock.quantity': item.quantity } },
+        { session }
+      ).catch(err => logger.error(`Stock restore error: ${err.message}`));
+    }
+
+    // Update order
+    order.status = 'cancelled';
+    order.cancellation = {
+      requestedBy: 'admin',
+      reason,
+      refundAmount: refund && order.payment.method !== 'cod' ? order.pricing.totalAmount : 0,
+      refundStatus: refund && order.payment.method !== 'cod' ? 'pending' : 'not_applicable'
+    };
+    order.timestamps.cancelledAt = new Date();
+    order._updatedBy = 'admin';
+
+    // Process refund if needed
+    if (refund && order.payment.method !== 'cod' && order.payment.status === 'paid') {
+      order.payment.status = 'refunded';
+      order.payment.refundedAt = new Date();
+      order.cancellation.refundStatus = 'processed';
+      // Add actual refund logic here
+    }
+
+    // Update shop stats
+    await Shop.findByIdAndUpdate(
+      order.shop,
+      {
+        $inc: {
+          [`orderStats.${order.status}`]: -1,
+          'orderStats.cancelled': 1,
+          'earnings.pending': order.payment.method === 'cod' ? -order.pricing.totalAmount : 0,
+          'earnings.today': -order.pricing.totalAmount,
+          'earnings.weekly': -order.pricing.totalAmount,
+          'earnings.monthly': -order.pricing.totalAmount,
+          'earnings.total': -order.pricing.totalAmount
+        }
+      },
+      { session }
+    );
+
+    // Remove from delivery boy if assigned
+    if (order.deliveryBoy) {
+      const shop = await Shop.findById(order.shop).session(session);
+      const deliveryBoy = shop.deliveryBoys.id(order.deliveryBoy);
+
+      if (deliveryBoy) {
+        deliveryBoy.assignedOrders = deliveryBoy.assignedOrders.filter(
+          o => o.toString() !== orderId
+        );
+
+        if (deliveryBoy.assignedOrders.length === 0) {
+          deliveryBoy.status = 'active';
+        }
+
+        await shop.save({ session });
+
+        if (notify) {
+          PushNotificationService.sendToDeliveryBoy(
+            order.deliveryBoy,
+            order.shop,
+            'Delivery Cancelled',
+            `Delivery for order #${order.orderId} has been cancelled by admin.`
+          ).catch(err => logger.error(err));
+        }
+      }
+    }
+
+    await order.save({ session });
+    await session.commitTransaction();
+
+    // Send notifications
+    if (notify) {
+      if (order.user) {
+        PushNotificationService.sendToUser(
+          order.user,
+          'Order Cancelled by Admin',
+          `Your order #${order.orderId} has been cancelled. Reason: ${reason}.`,
+          { orderId: order._id, reason }
+        ).catch(err => logger.error(err));
+      }
+
+      if (order.shop) {
+        PushNotificationService.sendToShop(
+          order.shop,
+          'Order Cancelled by Admin',
+          `Order #${order.orderId} has been cancelled. Reason: ${reason}.`,
+          { orderId: order._id, reason }
+        ).catch(err => logger.error(err));
+      }
+    }
+
+    ResponseHandler.success(res, { order }, 'Order cancelled successfully');
+
+  } catch (error) {
+    await session.abortTransaction();
+    logger.error(`Admin cancel order error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  } finally {
+    session.endSession();
+  }
+};
+
+// Get order analytics
+exports.getOrderAnalytics = async (req, res) => {
+  try {
+    const {
+      period = 'today', // today, yesterday, week, month, year, custom
+      startDate,
+      endDate,
+      shopId,
+      groupBy = 'day' // hour, day, week, month
+    } = req.query;
+
+    let matchStage = {};
+
+    // Set date range based on period
+    const now = new Date();
+    let start, end;
+
+    switch (period) {
+      case 'today':
+        start = new Date(now.setHours(0, 0, 0, 0));
+        end = new Date(now.setHours(23, 59, 59, 999));
+        break;
+      case 'yesterday':
+        start = new Date(now.setDate(now.getDate() - 1));
+        start.setHours(0, 0, 0, 0);
+        end = new Date(start);
+        end.setHours(23, 59, 59, 999);
+        break;
+      case 'week':
+        start = new Date(now.setDate(now.getDate() - 7));
+        break;
+      case 'month':
+        start = new Date(now.setMonth(now.getMonth() - 1));
+        break;
+      case 'year':
+        start = new Date(now.setFullYear(now.getFullYear() - 1));
+        break;
+      case 'custom':
+        if (startDate) start = new Date(startDate);
+        if (endDate) end = new Date(endDate);
+        break;
+      default:
+        start = new Date(now.setDate(now.getDate() - 30));
+    }
+
+    if (start) matchStage.createdAt = { $gte: start };
+    if (end) matchStage.createdAt = { ...matchStage.createdAt, $lte: end };
+    if (shopId) matchStage.shop = shopId;
+
+    // Aggregation pipeline
+    const pipeline = [
+      { $match: matchStage },
+      {
+        $group: {
+          _id: null,
+          totalOrders: { $sum: 1 },
+          totalRevenue: { $sum: '$pricing.totalAmount' },
+          totalItems: { $sum: { $size: '$items' } },
+          avgOrderValue: { $avg: '$pricing.totalAmount' },
+          completedOrders: {
+            $sum: { $cond: [{ $eq: ['$status', 'delivered'] }, 1, 0] }
+          },
+          cancelledOrders: {
+            $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] }
+          },
+          pendingOrders: {
+            $sum: {
+              $cond: [{
+                $in: ['$status', ['pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'arriving']]
+              }, 1, 0]
+            }
+          },
+          totalDeliveryFee: { $sum: '$pricing.deliveryFee' },
+          totalTax: { $sum: '$pricing.tax' },
+          totalDiscount: { $sum: '$pricing.discount.amount' },
+          totalTip: { $sum: '$pricing.tip' }
+        }
+      }
+    ];
+
+    const analytics = await Order.aggregate(pipeline);
+    const result = analytics[0] || {
+      totalOrders: 0,
+      totalRevenue: 0,
+      totalItems: 0,
+      avgOrderValue: 0,
+      completedOrders: 0,
+      cancelledOrders: 0,
+      pendingOrders: 0,
+      totalDeliveryFee: 0,
+      totalTax: 0,
+      totalDiscount: 0,
+      totalTip: 0
+    };
+
+    // Time series data
+    let groupFormat;
+    switch (groupBy) {
+      case 'hour':
+        groupFormat = { hour: { $hour: '$createdAt' } };
+        break;
+      case 'week':
+        groupFormat = { week: { $week: '$createdAt' } };
+        break;
+      case 'month':
+        groupFormat = { month: { $month: '$createdAt' } };
+        break;
+      default: // day
+        groupFormat = { day: { $dayOfMonth: '$createdAt' }, month: { $month: '$createdAt' }, year: { $year: '$createdAt' } };
+    }
+
+    const timeSeriesPipeline = [
+      { $match: matchStage },
+      {
+        $group: {
+          _id: groupFormat,
+          orders: { $sum: 1 },
+          revenue: { $sum: '$pricing.totalAmount' },
+          items: { $sum: { $size: '$items' } }
+        }
+      },
+      { $sort: { '_id': 1 } }
+    ];
+
+    const timeSeries = await Order.aggregate(timeSeriesPipeline);
+
+    // Top shops
+    const topShops = await Order.aggregate([
+      { $match: matchStage },
+      {
+        $group: {
+          _id: '$shop',
+          orders: { $sum: 1 },
+          revenue: { $sum: '$pricing.totalAmount' },
+          avgRating: { $avg: '$shopInfo.rating' }
+        }
+      },
+      { $sort: { revenue: -1 } },
+      { $limit: 10 },
+      {
+        $lookup: {
+          from: 'shops',
+          localField: '_id',
+          foreignField: '_id',
+          as: 'shopDetails'
+        }
+      },
+      { $unwind: '$shopDetails' },
+      {
+        $project: {
+          shopId: '$_id',
+          shopName: '$shopDetails.name',
+          orders: 1,
+          revenue: 1,
+          avgRating: 1
+        }
+      }
+    ]);
+
+    // Top products
+    const topProducts = await Order.aggregate([
+      { $match: matchStage },
+      { $unwind: '$items' },
+      {
+        $group: {
+          _id: '$items.product',
+          name: { $first: '$items.name' },
+          quantity: { $sum: '$items.quantity' },
+          revenue: { $sum: { $multiply: ['$items.quantity', '$items.price.sellingPrice'] } }
+        }
+      },
+      { $sort: { quantity: -1 } },
+      { $limit: 20 }
+    ]);
+
+    ResponseHandler.success(res, {
+      summary: result,
+      timeSeries,
+      topShops,
+      topProducts,
+      period,
+      groupBy,
+      dateRange: { start, end }
+    }, 'Analytics fetched successfully');
+
+  } catch (error) {
+    logger.error(`Get order analytics error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// Export orders to CSV/Excel
+exports.exportOrders = async (req, res) => {
+  try {
+    const { format = 'csv', ...filters } = req.query;
+
+    // Build query from filters (similar to getAllOrders)
+    const query = {};
+    if (filters.status) query.status = filters.status;
+    if (filters.shopId) query.shop = filters.shopId;
+    if (filters.userId) query.user = filters.userId;
+    if (filters.dateFrom || filters.dateTo) {
+      query.createdAt = {};
+      if (filters.dateFrom) query.createdAt.$gte = new Date(filters.dateFrom);
+      if (filters.dateTo) query.createdAt.$lte = new Date(filters.dateTo);
+    }
+
+    const orders = await Order.find(query)
+      .populate('user', 'name phone email')
+      .populate('shop', 'name phone')
+      .populate('deliveryBoy', 'name phone')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    // Format data for export
+    const data = orders.map(order => ({
+      'Order ID': order.orderId,
+      'Date': order.createdAt.toISOString().split('T')[0],
+      'Time': order.createdAt.toISOString().split('T')[1].split('.')[0],
+      'Customer': order.customerInfo.name,
+      'Customer Phone': order.customerInfo.phone,
+      'Shop': order.shopInfo.name,
+      'Status': order.status,
+      'Payment Method': order.payment.method,
+      'Payment Status': order.payment.status,
+      'Items Total': order.pricing.itemsTotal,
+      'Delivery Fee': order.pricing.deliveryFee,
+      'Tax': order.pricing.tax,
+      'Discount': order.pricing.discount.amount,
+      'Tip': order.pricing.tip,
+      'Total Amount': order.pricing.totalAmount,
+      'Delivery Address': order.deliveryAddress?.formattedAddress || '',
+      'Delivery Boy': order.deliveryBoy?.name || '',
+      'Delivery Boy Phone': order.deliveryBoy?.phone || ''
+    }));
+
+    if (format === 'csv') {
+      // Convert to CSV
+      const csv = json2csv(data, { fields: Object.keys(data[0] || {}) });
+      
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename=orders_${Date.now()}.csv`);
+      return res.send(csv);
+    } else if (format === 'excel') {
+      // Create Excel workbook
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('Orders');
+      
+      // Add headers
+      const headers = Object.keys(data[0] || {});
+      worksheet.addRow(headers);
+      
+      // Add data
+      data.forEach(row => {
+        worksheet.addRow(Object.values(row));
+      });
+      
+      // Set response headers
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename=orders_${Date.now()}.xlsx`);
+      
+      // Send file
+      await workbook.xlsx.write(res);
+      res.end();
+    } else {
+      ResponseHandler.error(res, 'Invalid format. Use csv or excel', 400);
+    }
+
+  } catch (error) {
+    logger.error(`Export orders error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+exports.getOrderStats = async (req, res) => {
+  try {
+    const { period = 'today', shopId } = req.query;
+
+    let matchQuery = {};
+    
+    if (shopId) {
+      matchQuery.shop = shopId;
+    }
+
+    // Set date range if period is specified
+    if (period !== 'all') {
+      const now = new Date();
+      let startDate;
+
+      switch (period) {
+        case 'today':
+          startDate = new Date(now.setHours(0, 0, 0, 0));
+          break;
+        case 'yesterday':
+          startDate = new Date(now.setDate(now.getDate() - 1));
+          startDate.setHours(0, 0, 0, 0);
+          break;
+        case 'week':
+          startDate = new Date(now.setDate(now.getDate() - 7));
+          break;
+        case 'month':
+          startDate = new Date(now.setMonth(now.getMonth() - 1));
+          break;
+        case 'year':
+          startDate = new Date(now.setFullYear(now.getFullYear() - 1));
+          break;
+      }
+
+      if (startDate) {
+        matchQuery.createdAt = { $gte: startDate };
+      }
+    }
+
+    // Get status counts
+    const statusCounts = await Order.aggregate([
+      { $match: matchQuery },
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    // Calculate totals
+    const stats = {
+      total: 0,
+      pending: 0,
+      confirmed: 0,
+      preparing: 0,
+      ready: 0,
+      out_for_delivery: 0,
+      arriving: 0,
+      delivered: 0,
+      cancelled: 0,
+      rejected: 0
+    };
+
+    // Map status counts to stats object
+    statusCounts.forEach(item => {
+      const status = item._id;
+      const count = item.count;
+      stats.total += count;
+      
+      if (stats.hasOwnProperty(status)) {
+        stats[status] = count;
+      }
+    });
+
+    // Get revenue stats
+    const revenueStats = await Order.aggregate([
+      { $match: { ...matchQuery, status: 'delivered' } },
+      {
+        $group: {
+          _id: null,
+          totalRevenue: { $sum: '$pricing.totalAmount' },
+          avgOrderValue: { $avg: '$pricing.totalAmount' },
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    // Get payment stats
+    const paymentStats = await Order.aggregate([
+      { $match: matchQuery },
+      {
+        $group: {
+          _id: '$payment.status',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    // Process payment stats
+    const payment = {
+      paid: 0,
+      pending: 0,
+      failed: 0,
+      refunded: 0
+    };
+
+    paymentStats.forEach(item => {
+      if (payment.hasOwnProperty(item._id)) {
+        payment[item._id] = item.count;
+      }
+    });
+
+    // Get recent orders count
+    const recentOrdersCount = await Order.countDocuments({
+      ...matchQuery,
+      createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+    });
+
+    ResponseHandler.success(res, {
+      stats,
+      revenue: revenueStats[0] || {
+        totalRevenue: 0,
+        avgOrderValue: 0,
+        count: 0
+      },
+      payment,
+      recent24Hours: recentOrdersCount,
+      period,
+      shopId
+    }, 'Order statistics fetched successfully');
+
+  } catch (error) {
+    logger.error(`Get order stats error: ${error.message}`);
     ResponseHandler.error(res, error.message, 500);
   }
 };
