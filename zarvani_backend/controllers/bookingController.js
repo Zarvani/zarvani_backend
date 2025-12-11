@@ -1,8 +1,8 @@
 // ============= controllers/bookingController.js (COMPLETE - NO AUTO TIMEOUT) =============
 const Booking = require('../models/Booking');
 const ServiceProvider = require('../models/ServiceProvider');
-const { Shop } = require('../models/Shop');
-const { Product } = require('../models/Product');
+const Shop  = require('../models/Shop');
+const  Product  = require('../models/Product');
 const ResponseHandler = require('../utils/responseHandler');
 const GeoService = require('../services/geoService');
 const PushNotificationService = require('../services/pushNotification');
@@ -546,10 +546,10 @@ exports.updateBookingStatus = async (req, res) => {
 // ========================== GET TRACKING INFO ==========================
 exports.getTrackingInfo = async (req, res) => {
   try {
-    const { bookingId } = req.params;
+    const { id } = req.params;
     
     const booking = await Booking.findOne({
-      _id: bookingId,
+      _id: id,
       user: req.user._id
     }).populate('provider', 'name phone profilePicture vehicle ratings')
       .populate('service', 'title category');

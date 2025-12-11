@@ -2,7 +2,7 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const ServiceProvider = require('../models/ServiceProvider');
-const { Shop } = require('../models/Shop');
+const  Shop  = require('../models/Shop');
 const { Admin } =require('../models/Admin');
 
 exports.protect = async (req, res, next) => {

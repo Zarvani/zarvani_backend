@@ -21,5 +21,19 @@ router.put('/products/:id', uploadImages, shopController.updateProduct);
 router.delete('/products/:id', shopController.deleteProduct);
 router.get('/orders', shopController.getOrders);
 router.put('/orders/:id/status', shopController.updateOrderStatus);
+router.post('/delivery-boys', shopController.addDeliveryBoy);
+router.get('/delivery-boys', shopController.getDeliveryBoys);
+router.get('/delivery-boys/:id', shopController.getDeliveryBoy);
+router.put('/delivery-boys/:id', shopController.updateDeliveryBoy);
+router.delete('/delivery-boys/:id', shopController.deleteDeliveryBoy);
 
+// Upload documents for delivery boy
+router.post(
+  '/delivery-boys/:id/documents',
+  uploadMultipleDocuments,
+  shopController.uploadDeliveryBoyDocuments
+);
+
+// Get delivery boys stats
+router.get('/delivery-boys/:id/stats', shopController.getDeliveryBoyStats);
 module.exports = router;
