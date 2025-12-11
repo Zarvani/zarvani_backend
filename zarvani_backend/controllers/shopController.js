@@ -1,6 +1,6 @@
 // ============= controllers/shopController.js =============
-const { Shop} = require('../models/Shop');
-const { Product } =require("../models/Product")
+const Shop = require('../models/Shop');
+const  Product  =require("../models/Product")
 const ResponseHandler = require('../utils/responseHandler');
 const { deleteFromCloudinary } = require('../middleware/uploadMiddleware');
 const GeoService = require('../services/geoService');
@@ -98,6 +98,251 @@ exports.uploadDocuments = async (req, res) => {
     ResponseHandler.success(res, { documents: shop.documents }, 'Documents uploaded successfully');
   } catch (error) {
     logger.error(`Upload shop documents error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+// Add Delivery Boy
+exports.addDeliveryBoy = async (req, res) => {
+  try {
+    const { name, phone, email, password, vehicle } = req.body;
+    
+    // Check if phone already exists in shop's delivery boys
+    const shop = await Shop.findById(req.user._id);
+    const existingBoy = shop.deliveryBoys.find(boy => boy.phone === phone);
+    
+    if (existingBoy) {
+      return ResponseHandler.error(res, 'Delivery boy with this phone already exists', 400);
+    }
+    
+    // Create new delivery boy
+    const deliveryBoy = {
+      name,
+      phone,
+      email: email || undefined,
+      password,
+      vehicle: vehicle || { type: 'bike' },
+      status: 'inactive',
+      isActive: true,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    
+    shop.deliveryBoys.push(deliveryBoy);
+    await shop.save();
+    
+    // Remove password from response
+    const addedBoy = shop.deliveryBoys[shop.deliveryBoys.length - 1].toObject();
+    delete addedBoy.password;
+    
+    ResponseHandler.success(res, { deliveryBoy: addedBoy }, 'Delivery boy added successfully', 201);
+  } catch (error) {
+    logger.error(`Add delivery boy error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// Get All Delivery Boys
+exports.getDeliveryBoys = async (req, res) => {
+  try {
+    const { status } = req.query;
+    
+    const shop = await Shop.findById(req.user._id);
+    
+    let deliveryBoys = shop.deliveryBoys;
+    
+    if (status) {
+      deliveryBoys = deliveryBoys.filter(boy => boy.status === status);
+    }
+    
+    // Remove passwords from response
+    deliveryBoys = deliveryBoys.map(boy => {
+      const boyObj = boy.toObject();
+      delete boyObj.password;
+      return boyObj;
+    });
+    
+    ResponseHandler.success(res, { deliveryBoys }, 'Delivery boys fetched successfully');
+  } catch (error) {
+    logger.error(`Get delivery boys error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// Get Single Delivery Boy
+exports.getDeliveryBoy = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const shop = await Shop.findById(req.user._id);
+    const deliveryBoy = shop.deliveryBoys.id(id);
+    
+    if (!deliveryBoy) {
+      return ResponseHandler.error(res, 'Delivery boy not found', 404);
+    }
+    
+    const boyObj = deliveryBoy.toObject();
+    delete boyObj.password;
+    
+    ResponseHandler.success(res, { deliveryBoy: boyObj }, 'Delivery boy fetched successfully');
+  } catch (error) {
+    logger.error(`Get delivery boy error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// Update Delivery Boy
+exports.updateDeliveryBoy = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updates = req.body;
+    
+    const shop = await Shop.findById(req.user._id);
+    const deliveryBoy = shop.deliveryBoys.id(id);
+    
+    if (!deliveryBoy) {
+      return ResponseHandler.error(res, 'Delivery boy not found', 404);
+    }
+    
+    // Update fields
+    if (updates.name) deliveryBoy.name = updates.name;
+    if (updates.email) deliveryBoy.email = updates.email;
+    if (updates.vehicle) deliveryBoy.vehicle = updates.vehicle;
+    if (updates.status) deliveryBoy.status = updates.status;
+    if (updates.isActive !== undefined) deliveryBoy.isActive = updates.isActive;
+    
+    // Handle password update
+    if (updates.password) {
+      const salt = await bcrypt.genSalt(10);
+      deliveryBoy.password = await bcrypt.hash(updates.password, salt);
+    }
+    
+    deliveryBoy.updatedAt = new Date();
+    
+    await shop.save();
+    
+    const boyObj = deliveryBoy.toObject();
+    delete boyObj.password;
+    
+    ResponseHandler.success(res, { deliveryBoy: boyObj }, 'Delivery boy updated successfully');
+  } catch (error) {
+    logger.error(`Update delivery boy error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// Delete Delivery Boy
+exports.deleteDeliveryBoy = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const shop = await Shop.findById(req.user._id);
+    const deliveryBoy = shop.deliveryBoys.id(id);
+    
+    if (!deliveryBoy) {
+      return ResponseHandler.error(res, 'Delivery boy not found', 404);
+    }
+    
+    // Check if delivery boy has assigned orders
+    if (deliveryBoy.assignedOrders && deliveryBoy.assignedOrders.length > 0) {
+      return ResponseHandler.error(res, 'Cannot delete delivery boy with assigned orders', 400);
+    }
+    
+    // Remove delivery boy from array
+    shop.deliveryBoys.pull(id);
+    await shop.save();
+    
+    ResponseHandler.success(res, null, 'Delivery boy deleted successfully');
+  } catch (error) {
+    logger.error(`Delete delivery boy error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// Upload Delivery Boy Documents
+exports.uploadDeliveryBoyDocuments = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { documentType } = req.body; // 'drivingLicense' or 'aadharCard'
+    
+    if (!req.file) {
+      return ResponseHandler.error(res, 'No file uploaded', 400);
+    }
+    
+    if (!['drivingLicense', 'aadharCard'].includes(documentType)) {
+      return ResponseHandler.error(res, 'Invalid document type', 400);
+    }
+    
+    const shop = await Shop.findById(req.user._id);
+    const deliveryBoy = shop.deliveryBoys.id(id);
+    
+    if (!deliveryBoy) {
+      return ResponseHandler.error(res, 'Delivery boy not found', 404);
+    }
+    
+    // Delete old document if exists
+    if (deliveryBoy.documents[documentType]?.publicId) {
+      await deleteFromCloudinary(deliveryBoy.documents[documentType].publicId);
+    }
+    
+    // Update document
+    deliveryBoy.documents[documentType] = {
+      url: req.file.path,
+      publicId: req.file.filename,
+      verified: false
+    };
+    
+    await shop.save();
+    
+    ResponseHandler.success(
+      res, 
+      { documents: deliveryBoy.documents }, 
+      'Document uploaded successfully'
+    );
+  } catch (error) {
+    logger.error(`Upload delivery boy documents error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// Get Delivery Boy Performance Stats
+exports.getDeliveryBoyStats = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    console.log("Shop ID from token:", req.user._id);
+    console.log("DeliveryBoy ID from URL:", id);
+
+    const shop = await Shop.findById(req.user._id);
+
+    if (!shop) {
+      return ResponseHandler.error(res, "Shop not found", 404);
+    }
+
+    console.log("All DBoys:", shop.deliveryBoys.map(b => b._id));
+
+    const deliveryBoy = shop.deliveryBoys.id(id);
+
+    if (!deliveryBoy) {
+      return ResponseHandler.error(res, "Delivery boy not found", 404);
+    }
+
+    const stats = {
+      totalDeliveries: deliveryBoy.totalDeliveries,
+      ratings: deliveryBoy.ratings,
+      earnings: deliveryBoy.earnings,
+      assignedOrders: deliveryBoy.assignedOrders.length,
+      status: deliveryBoy.status,
+      vehicle: deliveryBoy.vehicle
+    };
+
+    return ResponseHandler.success(
+      res,
+      { stats },
+      "Delivery boy stats fetched successfully"
+    );
+
+  } catch (error) {
+    console.error("Error:", error);
     ResponseHandler.error(res, error.message, 500);
   }
 };

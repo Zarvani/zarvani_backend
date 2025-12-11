@@ -1,5 +1,5 @@
-const { Shop } = require('../models/Shop');
-const { Product } = require('../models/Product');
+const  Shop  = require('../models/Shop');
+const  Product = require('../models/Product');
 const { Order } = require('../models/Order'); // Assuming you have an Order model
 const ResponseHandler = require('../utils/responseHandler');
 
@@ -133,37 +133,60 @@ exports.getShopProducts = async (req, res) => {
 // ==================== SHOP OWNER ROUTES ====================
 
 // Add New Product
+// ================== ADD PRODUCT ==================
 exports.addProduct = async (req, res) => {
   try {
-    const { 
-      name, 
-      description, 
-      category, 
+    const {
+      name,
+      description,
+      category,
       subcategory,
-      price, 
-      stock, 
+      price,
+      stock,
       sku,
       brand,
       specifications,
       tags
     } = req.body;
-    
-    // Verify user is a shop owner
-    if (req.user.role !== 'shop') {
-      return ResponseHandler.error(res, 'Only shop owners can add products', 403);
+
+    // 1️⃣ ONLY SHOP OWNER CAN ADD PRODUCTS
+    if (req.user.role !== "shop") {
+      return ResponseHandler.error(res, "Only shop owners can add products", 403);
     }
-    
-    // Verify shop exists and is active
+
+    // 2️⃣ CHECK SHOP ACCOUNT STATUS
     const shop = await Shop.findById(req.user._id);
     if (!shop || !shop.isActive) {
-      return ResponseHandler.error(res, 'Shop not found or inactive', 403);
+      return ResponseHandler.error(res, "Shop not found or inactive", 403);
     }
-    
-    // Calculate discount
-    const discount = price.mrp && price.sellingPrice 
-      ? Math.round(((price.mrp - price.sellingPrice) / price.mrp) * 100)
-      : 0;
-    
+
+    // 3️⃣ PARSE SPECIFICATIONS (IMPORTANT)
+    let parsedSpecifications = [];
+    try {
+      if (specifications) {
+        parsedSpecifications =
+          typeof specifications === "string"
+            ? JSON.parse(specifications)
+            : specifications;
+      }
+    } catch (err) {
+      return ResponseHandler.error(res, "Invalid specifications format", 400);
+    }
+
+    // 4️⃣ PARSE TAGS
+    const parsedTags = Array.isArray(tags)
+      ? tags
+      : tags
+      ? tags.split(",").map((t) => t.trim())
+      : [];
+
+    // 5️⃣ CALCULATE DISCOUNT
+    const discount =
+      price?.mrp && price?.sellingPrice
+        ? Math.round(((price.mrp - price.sellingPrice) / price.mrp) * 100)
+        : 0;
+
+    // 6️⃣ PREPARE PRODUCT DATA
     const productData = {
       shop: req.user._id,
       name,
@@ -177,77 +200,112 @@ exports.addProduct = async (req, res) => {
       stock,
       sku,
       brand,
-      specifications,
-      tags: tags ? (Array.isArray(tags) ? tags : tags.split(',').map(t => t.trim())) : []
+      specifications: parsedSpecifications,
+      tags: parsedTags
     };
-    
-    // Handle image uploads
+
+    // 7️⃣ HANDLE IMAGES
     if (req.files && req.files.length > 0) {
-      productData.images = req.files.map(file => ({
+      productData.images = req.files.map((file) => ({
         url: file.path,
         publicId: file.filename
       }));
     }
-    
+
+    // 8️⃣ SAVE PRODUCT
     const product = await Product.create(productData);
-    
-    ResponseHandler.success(res, { product }, 'Product added successfully', 201);
+
+    return ResponseHandler.success(
+      res,
+      { product },
+      "Product added successfully",
+      201
+    );
   } catch (error) {
-    ResponseHandler.error(res, error.message, 500);
+    return ResponseHandler.error(res, error.message, 500);
   }
 };
 
-// Update Product
+// ================== UPDATE PRODUCT ==================
 exports.updateProduct = async (req, res) => {
   try {
-    const { id } = req.params;
-    const updateData = req.body;
-    
-    // Find product
-    const product = await Product.findById(id);
+    const productId = req.params.id;
+
+    // 1️⃣ ONLY SHOP OWNER CAN UPDATE
+    if (req.user.role !== "shop") {
+      return ResponseHandler.error(res, "Only shop owners can update products", 403);
+    }
+
+    // 2️⃣ FIND PRODUCT
+    const product = await Product.findOne({
+      _id: productId,
+      shop: req.user._id
+    });
+
     if (!product) {
-      return ResponseHandler.error(res, 'Product not found', 404);
+      return ResponseHandler.error(res, "Product not found", 404);
     }
-    
-    // Verify ownership
-    if (product.shop.toString() !== req.user._id.toString()) {
-      return ResponseHandler.error(res, 'Not authorized to update this product', 403);
+
+    const updateData = { ...req.body };
+
+    // 3️⃣ FIX: PARSE PRICE IF NEEDED
+    if (updateData.price && typeof updateData.price === "string") {
+      updateData.price = JSON.parse(updateData.price);
     }
-    
-    // Calculate discount if prices are updated
-    if (updateData.price) {
-      if (updateData.price.mrp && updateData.price.sellingPrice) {
-        updateData.price.discount = Math.round(
-          ((updateData.price.mrp - updateData.price.sellingPrice) / updateData.price.mrp) * 100
-        );
+
+    // 4️⃣ RECALCULATE DISCOUNT
+    if (updateData.price?.mrp && updateData.price?.sellingPrice) {
+      updateData.price.discount = Math.round(
+        ((updateData.price.mrp - updateData.price.sellingPrice) /
+          updateData.price.mrp) *
+          100
+      );
+    }
+
+    // 5️⃣ PARSE SPECIFICATIONS
+    if (updateData.specifications) {
+      try {
+        updateData.specifications =
+          typeof updateData.specifications === "string"
+            ? JSON.parse(updateData.specifications)
+            : updateData.specifications;
+      } catch (err) {
+        return ResponseHandler.error(res, "Invalid specifications format", 400);
       }
     }
-    
-    // Handle new image uploads
+
+    // 6️⃣ PARSE TAGS
+    if (updateData.tags) {
+      updateData.tags = Array.isArray(updateData.tags)
+        ? updateData.tags
+        : updateData.tags.split(",").map((t) => t.trim());
+    }
+
+    // 7️⃣ ADD NEW IMAGES IF ANY
     if (req.files && req.files.length > 0) {
-      const newImages = req.files.map(file => ({
+      const newImages = req.files.map((file) => ({
         url: file.path,
         publicId: file.filename
       }));
-      
-      // Append to existing images or replace
-      updateData.images = [...(product.images || []), ...newImages];
+
+      updateData.images = [...product.images, ...newImages];
     }
-    
-    // Handle tags
-    if (updateData.tags && typeof updateData.tags === 'string') {
-      updateData.tags = updateData.tags.split(',').map(t => t.trim());
-    }
-    
+
+    // 8️⃣ UPDATE PRODUCT
     const updatedProduct = await Product.findByIdAndUpdate(
-      id,
+      productId,
       updateData,
-      { new: true, runValidators: true }
-    ).populate('shop', 'name logo address phone');
-    
-    ResponseHandler.success(res, { product: updatedProduct }, 'Product updated successfully');
+      { new: true }
+    );
+
+    return ResponseHandler.success(
+      res,
+      { product: updatedProduct },
+      "Product updated successfully",
+      200
+    );
   } catch (error) {
-    ResponseHandler.error(res, error.message, 500);
+    return ResponseHandler.error(res, error.message, 500);
   }
 };
 

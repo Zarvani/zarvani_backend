@@ -1,11 +1,11 @@
 // ============= controllers/adminController.js =============
 const User = require('../models/User');
 const ServiceProvider = require('../models/ServiceProvider');
-const { Shop } = require('../models/Shop');
+const Shop  = require('../models/Shop');
 const Booking =require("../models/Booking")
 const Payment = require("../models/Payment");
 const { Service } =require("../models/Service")
-const { Product } =require("../models/Product")
+const Product  =require("../models/Product")
 const ResponseHandler = require('../utils/responseHandler');
 const EmailService = require('../services/emailService');
 const { Admin } = require('../models/Admin');

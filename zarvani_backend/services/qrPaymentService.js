@@ -8,10 +8,25 @@ const logger = require('../utils/logger');
 
 class QRPaymentService {
   
-  // Generate QR for user payment (always company account)
-  static async generateUserQRPayment(bookingId, orderId, amount, userId) {
+  // ✅ NEW: Generate payment QR with destination choice
+  static async generatePaymentQR(data) {
     try {
-      // Validate booking/order exists and belongs to user
+      const {
+        bookingId,
+        orderId,
+        amount,
+        userId,
+        paymentDestination = 'company_account', // Default to company account
+        providerId,
+        shopId
+      } = data;
+      
+      // Validate required fields
+      if (!amount || amount <= 0) {
+        throw new Error('Valid amount is required');
+      }
+      
+      // Verify booking/order exists and belongs to user
       if (bookingId) {
         const booking = await Booking.findOne({ _id: bookingId, user: userId });
         if (!booking) {
@@ -25,31 +40,48 @@ class QRPaymentService {
           throw new Error('Order not found or unauthorized');
         }
       }
-
+      
+      // Create payment record
       const payment = await Payment.create({
         transactionId: `QR-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         booking: bookingId,
         order: orderId,
         user: userId,
+        provider: providerId,
+        shop: shopId,
         amount,
         paymentMethod: 'qr',
-        paymentDestination: 'company_account',
+        paymentDestination,
         status: 'pending'
       });
-
+      
+      // Calculate commission
+      await payment.calculateCommission();
+      
+      // Generate QR code
       const qrData = await payment.generateQRCode();
-      await payment.processCommission();
       await payment.save();
-
-      logger.info(`User QR generated for payment: ${payment._id}`);
-      return qrData;
+      
+      logger.info(`QR generated for payment: ${payment._id}, destination: ${paymentDestination}`);
+      
+      return {
+        payment,
+        qrData: {
+          qrImageUrl: qrData.qrImageUrl,
+          upiDeepLink: qrData.upiDeepLink,
+          upiId: qrData.upiId,
+          amount: qrData.amount,
+          expiresAt: qrData.expiresAt,
+          isCompanyQR: qrData.isCompanyQR
+        }
+      };
     } catch (error) {
-      logger.error(`Generate user QR error: ${error.message}`);
+      logger.error(`Generate payment QR error: ${error.message}`);
       throw error;
     }
   }
-
-  // Generate QR for provider/shop collection
+  
+  // ✅ NEW: Generate collection QR for provider/shop
   static async generateCollectionQR(paymentId, destination, ownerId, ownerType) {
     try {
       const payment = await Payment.findById(paymentId);
@@ -57,7 +89,7 @@ class QRPaymentService {
       if (!payment) {
         throw new Error('Payment not found');
       }
-
+      
       // Verify ownership
       let isOwner = false;
       if (ownerType === 'provider' && payment.provider?.toString() === ownerId.toString()) {
@@ -65,155 +97,193 @@ class QRPaymentService {
       } else if (ownerType === 'shop' && payment.shop?.toString() === ownerId.toString()) {
         isOwner = true;
       }
-
+      
       if (!isOwner) {
         throw new Error('Unauthorized to generate collection QR');
       }
-
+      
+      // Update payment destination
       payment.paymentDestination = destination;
       payment.paymentMethod = 'qr';
       
-      if (destination === 'personal_account') {
-        // Calculate pending commission
-        payment.commission.pendingCommissionRate = 20;
-        payment.paymentVerification.status = 'pending';
-        payment.paymentVerification.dueDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
-      }
+      // Calculate commission for new destination
+      await payment.calculateCommission();
       
-      await payment.save();
-      await payment.processCommission();
-      
+      // Generate QR code
       const qrData = await payment.generateQRCode();
+      await payment.save();
       
       logger.info(`Collection QR generated for payment: ${payment._id}, destination: ${destination}`);
-      return { qrData, payment };
+      
+      return {
+        payment,
+        qrData: {
+          qrImageUrl: qrData.qrImageUrl,
+          upiDeepLink: qrData.upiDeepLink,
+          upiId: qrData.upiId,
+          amount: qrData.amount,
+          expiresAt: qrData.expiresAt,
+          isCompanyQR: qrData.isCompanyQR
+        }
+      };
     } catch (error) {
       logger.error(`Generate collection QR error: ${error.message}`);
       throw error;
     }
   }
-
-  // Verify UPI Payment (Webhook from Razorpay/UPI)
-  static async verifyUPIPayment(transactionId, upiId, amount, timestamp) {
+  
+  // ✅ NEW: UPI Payment Webhook Handler
+  static async handleUPIWebhook(webhookData) {
     try {
+      const {
+        transactionId,
+        upiId,
+        amount,
+        status,
+        timestamp,
+        referenceId,
+        payerUpiId,
+        payerName
+      } = webhookData;
+      
+      // Find payment by UPI ID and amount
       const payment = await Payment.findOne({
-        'qrPayment.upiId': upiId,
-        'qrPayment.amount': amount,
-        status: 'pending',
-        'qrPayment.expiresAt': { $gt: new Date() }
+        $or: [
+          { 'qrPayment.upiId': upiId },
+          { 'qrPayment.upiId': payerUpiId }
+        ],
+        amount: amount,
+        status: 'pending'
       }).populate('provider shop user');
-
+      
       if (!payment) {
-        throw new Error('Payment not found or expired');
+        logger.warn(`No pending payment found for UPI: ${upiId}, amount: ${amount}`);
+        return null;
       }
-
-      payment.status = 'success';
-      payment.gatewayTransactionId = transactionId;
-      payment.paymentDate = new Date(timestamp);
-      payment.qrPayment.status = 'paid';
-      payment.verified = true;
-
-      // Process commission based on payment destination
-      if (payment.paymentDestination === 'company_account') {
-        await this.processCompanyAccountPayment(payment);
+      
+      // Check if QR is expired
+      if (payment.isQRExpired()) {
+        payment.status = 'expired';
+        payment.qrPayment.status = 'expired';
+        await payment.save();
+        throw new Error('QR code expired');
+      }
+      
+      if (status === 'success') {
+        // Process successful payment
+        await payment.processPaymentSuccess(transactionId, new Date(timestamp));
+        
+        // Update related booking/order
+        await this.updateRelatedEntityStatus(payment);
+        
+        // Send notifications
+        await this.sendPaymentNotifications(payment);
+        
+        logger.info(`UPI payment successful: ${transactionId} for payment: ${payment._id}`);
       } else {
-        await this.processPersonalAccountPayment(payment);
+        // Handle failed payment
+        payment.status = 'failed';
+        payment.qrPayment.status = 'expired';
+        await payment.save();
+        
+        logger.info(`UPI payment failed: ${transactionId} for payment: ${payment._id}`);
       }
-
-      await payment.save();
-
-      // Update booking/order status
-      await this.updateRelatedEntityStatus(payment);
-
-      // Send notifications
-      await this.sendPaymentSuccessNotifications(payment);
-
-      logger.info(`UPI payment verified: ${transactionId} for payment: ${payment._id}`);
+      
       return payment;
     } catch (error) {
-      logger.error(`UPI payment verification error: ${error.message}`);
+      logger.error(`UPI webhook error: ${error.message}`);
       throw error;
     }
   }
-
-  static async processCompanyAccountPayment(payment) {
+  
+  // ✅ NEW: Manual UPI payment verification
+  static async verifyManualUPIPayment(paymentId, verificationData) {
     try {
-      // Commission already calculated in processCommission method
-      // Initiate automatic payout to provider/shop
-      await this.initiatePayout(payment);
+      const {
+        transactionId,
+        screenshot,
+        notes,
+        verifiedBy
+      } = verificationData;
       
-      logger.info(`Company account payment processed: ${payment._id}`);
-    } catch (error) {
-      logger.error(`Process company account payment error: ${error.message}`);
-      throw error;
-    }
-  }
-
-  static async processPersonalAccountPayment(payment) {
-    try {
-      // For personal account, commission is pending
-      // Send notification about pending commission
-      await this.sendPendingCommissionNotification(payment);
+      const payment = await Payment.findById(paymentId);
       
-      logger.info(`Personal account payment processed: ${payment._id}, pending commission: ${payment.commission.pendingCommission}`);
-    } catch (error) {
-      logger.error(`Process personal account payment error: ${error.message}`);
-      throw error;
-    }
-  }
-
-  static async initiatePayout(payment) {
-    try {
-      const owner = await payment.getPaymentOwner();
-      
-      if (owner && owner.bankDetails) {
-        // Simulate Razorpay payout process
-        payment.payout = {
-          status: 'processing',
-          payoutDate: new Date()
-        };
-
-        // In real implementation, integrate with Razorpay Payouts API
-        // const razorpay = require('razorpay');
-        // const payout = await razorpay.payouts.create({
-        //   account_number: owner.bankDetails.accountNumber,
-        //   fund_account_id: owner.razorpayContactId,
-        //   amount: payment.commission.providerEarning * 100, // in paise
-        //   currency: 'INR',
-        //   mode: 'IMPS',
-        //   purpose: 'payout'
-        // });
-
-        logger.info(`Payout initiated for payment: ${payment._id}, amount: ${payment.commission.providerEarning}`);
+      if (!payment) {
+        throw new Error('Payment not found');
       }
-    } catch (error) {
-      logger.error(`Payout initiation error: ${error.message}`);
-      payment.payout.status = 'failed';
-      payment.payout.failureReason = error.message;
-      await payment.save();
-    }
-  }
-
-  static async sendPendingCommissionNotification(payment) {
-    try {
-      const owner = await payment.getPaymentOwner();
-      const NotificationService = require('./pushNotification');
       
-      await NotificationService.sendToUser(
-        owner._id,
-        'Pending Commission',
-        `You have received payment of ₹${payment.amount}. Pending commission: ₹${payment.commission.pendingCommission} due by ${payment.paymentVerification.dueDate.toDateString()}`
-      );
-
-      logger.info(`Pending commission notification sent for payment: ${payment._id}`);
+      if (payment.status !== 'pending') {
+        throw new Error('Payment already processed');
+      }
+      
+      // Mark as manually verified
+      payment.status = 'success';
+      payment.paymentDate = new Date();
+      payment.verified = true;
+      payment.upiPayment = {
+        transactionId,
+        status: 'success',
+        verifiedAt: new Date(),
+        verificationMethod: 'manual'
+      };
+      payment.qrPayment.status = 'paid';
+      
+      // Process commission
+      if (payment.paymentDestination === 'company_account') {
+        await payment.initiatePayout();
+      } else {
+        await payment.recordPendingCommission();
+      }
+      
+      await payment.save();
+      
+      // Update related entity
+      await this.updateRelatedEntityStatus(payment);
+      
+      logger.info(`Manual UPI verification for payment: ${paymentId} by: ${verifiedBy}`);
+      
+      return payment;
     } catch (error) {
-      logger.error(`Send pending commission notification error: ${error.message}`);
+      logger.error(`Manual UPI verification error: ${error.message}`);
+      throw error;
     }
   }
-
-  static async sendPaymentSuccessNotifications(payment) {
+  
+  // ✅ NEW: Update related booking/order status
+  static async updateRelatedEntityStatus(payment) {
+    try {
+      if (payment.booking) {
+        const booking = await Booking.findById(payment.booking);
+        if (booking) {
+          booking.payment = payment._id;
+          booking.status = payment.paymentType === 'service' ? 'completed' : 'confirmed';
+          await booking.save();
+        }
+      }
+      
+      if (payment.order) {
+        const order = await Order.findById(payment.order);
+        if (order) {
+          order.payment.status = 'paid';
+          order.payment.paidAt = new Date();
+          order.payment.transactionId = payment.transactionId;
+          order.status = 'confirmed';
+          await order.save();
+        }
+      }
+      
+      logger.info(`Related entity status updated for payment: ${payment._id}`);
+    } catch (error) {
+      logger.error(`Update related entity status error: ${error.message}`);
+      throw error;
+    }
+  }
+  
+  // ✅ NEW: Send payment notifications
+  static async sendPaymentNotifications(payment) {
     try {
       const NotificationService = require('./pushNotification');
+      const EmailService = require('./emailService');
       
       // Notify user
       await NotificationService.sendToUser(
@@ -225,48 +295,45 @@ class QRPaymentService {
       // Notify provider/shop
       const owner = await payment.getPaymentOwner();
       if (owner) {
-        let message = `Payment of ₹${payment.amount} received successfully.`;
+        let message = '';
+        let subject = '';
         
-        if (payment.paymentDestination === 'personal_account') {
-          message += ` Pending commission: ₹${payment.commission.pendingCommission} due by ${payment.paymentVerification.dueDate.toDateString()}`;
+        if (payment.paymentDestination === 'company_account') {
+          const earning = payment.paymentType === 'service' ? 
+            payment.commission.providerEarning : 
+            payment.commission.shopEarning;
+          
+          subject = 'Payment Received - Commission Deducted';
+          message = `Payment of ₹${payment.amount} received. Your earning after commission: ₹${earning} will be transferred to your account.`;
         } else {
-          message += ` Your earnings: ₹${payment.commission.providerEarning} will be transferred shortly.`;
+          subject = 'Payment Received - Pending Commission';
+          message = `Payment of ₹${payment.amount} received directly to your account. Pending commission: ₹${payment.commission.pendingCommission} due by ${payment.pendingCommission.dueDate.toDateString()}.`;
         }
         
-        await NotificationService.sendToUser(owner._id, 'Payment Received', message);
-      }
-
-      logger.info(`Payment success notifications sent for payment: ${payment._id}`);
-    } catch (error) {
-      logger.error(`Send payment success notifications error: ${error.message}`);
-    }
-  }
-
-  static async updateRelatedEntityStatus(payment) {
-    try {
-      if (payment.booking) {
-        await Booking.findByIdAndUpdate(payment.booking, {
-          status: 'completed',
-          payment: payment._id
-        });
+        await NotificationService.sendToUser(owner._id, subject, message);
+        
+        // Send email to owner
+        if (owner.email) {
+          await EmailService.sendPaymentReceipt({
+            to: owner.email,
+            amount: payment.amount,
+            transactionId: payment.transactionId,
+            date: payment.paymentDate,
+            commission: payment.commission,
+            paymentDestination: payment.paymentDestination
+          });
+        }
       }
       
-      if (payment.order) {
-        await Order.findByIdAndUpdate(payment.order, {
-          status: 'delivered',
-          payment: payment._id,
-          'timestamps.deliveredAt': new Date()
-        });
-      }
-
-      logger.info(`Related entity status updated for payment: ${payment._id}`);
+      logger.info(`Payment notifications sent for payment: ${payment._id}`);
     } catch (error) {
-      logger.error(`Update related entity status error: ${error.message}`);
+      logger.error(`Send payment notifications error: ${error.message}`);
+      // Don't throw error, just log it
     }
   }
-
-  // Check for expired QR codes
-  static async checkExpiredQRs() {
+  
+  // ✅ NEW: Check and expire old QR codes
+  static async expireOldQRCodes() {
     try {
       const expiredPayments = await Payment.updateMany(
         {
@@ -276,19 +343,19 @@ class QRPaymentService {
         },
         {
           'qrPayment.status': 'expired',
-          status: 'failed'
+          status: 'expired'
         }
       );
-
+      
       logger.info(`Expired QR check completed. Updated: ${expiredPayments.modifiedCount} payments`);
       return expiredPayments.modifiedCount;
     } catch (error) {
-      logger.error(`Check expired QR error: ${error.message}`);
+      logger.error(`Expire old QR codes error: ${error.message}`);
       throw error;
     }
   }
-
-  // Get QR payment status
+  
+  // ✅ NEW: Get QR payment status
   static async getQRPaymentStatus(paymentId, userId) {
     try {
       const payment = await Payment.findOne({
@@ -299,21 +366,66 @@ class QRPaymentService {
           { shop: userId }
         ]
       });
-
+      
       if (!payment) {
         throw new Error('Payment not found or unauthorized');
       }
-
+      
+      const owner = await payment.getPaymentOwner();
+      
       return {
+        paymentId: payment._id,
+        transactionId: payment.transactionId,
         status: payment.status,
         qrStatus: payment.qrPayment.status,
         amount: payment.amount,
         paymentDestination: payment.paymentDestination,
-        commission: payment.commission,
-        paymentVerification: payment.paymentVerification
+        paymentType: payment.paymentType,
+        commission: {
+          total: payment.totalCommission,
+          pending: payment.commission.pendingCommission,
+          ownerEarning: payment.netEarning
+        },
+        qrData: {
+          upiId: payment.qrPayment.upiId,
+          upiDeepLink: payment.qrPayment.upiDeepLink,
+          expiresAt: payment.qrPayment.expiresAt,
+          isExpired: payment.isQRExpired()
+        },
+        owner: owner ? {
+          id: owner._id,
+          name: owner.name,
+          type: payment.getOwnerType()
+        } : null,
+        verification: payment.paymentVerification,
+        payout: payment.payout
       };
     } catch (error) {
       logger.error(`Get QR payment status error: ${error.message}`);
+      throw error;
+    }
+  }
+  
+  // ✅ NEW: Generate UPI deep link for manual payment
+  static async generateUPIDeepLink(data) {
+    try {
+      const { upiId, name, amount, transactionNote } = data;
+      
+      if (!upiId || !amount) {
+        throw new Error('UPI ID and amount are required');
+      }
+      
+      const transactionId = `UPI-${Date.now()}`;
+      const deepLink = `upi://pay?pa=${upiId}&pn=${encodeURIComponent(name || 'Payment')}&am=${amount}&cu=INR&tn=${encodeURIComponent(transactionNote || 'Payment')}&tr=${transactionId}`;
+      
+      return {
+        deepLink,
+        transactionId,
+        upiId,
+        amount
+      };
+    } catch (error) {
+      logger.error(`Generate UPI deep link error: ${error.message}`);
       throw error;
     }
   }

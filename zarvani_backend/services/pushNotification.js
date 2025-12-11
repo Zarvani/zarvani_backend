@@ -16,7 +16,30 @@ class PushNotificationService {
       return false;
     }
   }
-  
+  static async sendToShop(shopId, title, body, data = {}) {
+    try {
+      // TODO: Fetch shop device tokens from DB
+      // For example: const tokens = await Shop.findById(shopId).select('deviceTokens');
+      logger.info(`Notification sent to shop ${shopId}: ${title}`);
+      console.log('Push to Shop:', { shopId, title, body, data });
+      return true;
+    } catch (error) {
+      logger.error(`Push to shop error: ${error.message}`);
+      return false;
+    }
+  }
+
+  static async sendToDeliveryPerson(deliveryPersonId, title, body, data = {}) {
+    try {
+      // TODO: Fetch delivery person's device tokens from DB
+      logger.info(`Notification sent to delivery person ${deliveryPersonId}: ${title}`);
+      console.log('Push to Delivery:', { deliveryPersonId, title, body, data });
+      return true;
+    } catch (error) {
+      logger.error(`Push to delivery error: ${error.message}`);
+      return false;
+    }
+  }
   static async sendToUser(userId, title, body, data = {}) {
     // Get user's device tokens from database and send notification
     // This is a placeholder implementation
