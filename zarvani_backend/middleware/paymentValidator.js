@@ -3,15 +3,45 @@ const ResponseHandler = require('../utils/responseHandler');
 
 const paymentSchemas = {
   // Create QR Payment
-  createQR: Joi.object({
-    bookingId: Joi.string().hex().length(24),
-    orderId: Joi.string().hex().length(24),
-    amount: Joi.number().positive().required(),
-    paymentDestination: Joi.string().valid('company_account', 'personal_account').default('company_account'),
-    providerId: Joi.string().hex().length(24),
-    shopId: Joi.string().hex().length(24)
-  }).or('bookingId', 'orderId'),
-  
+ createQR: Joi.object({
+  bookingId: Joi.string()
+    .hex()
+    .length(24)
+    .allow(null, '')
+    .empty(['', null])
+    .optional(),
+
+  orderId: Joi.string()
+    .hex()
+    .length(24)
+    .allow(null, '')
+    .empty(['', null])
+    .optional(),
+
+  amount: Joi.number().positive().required(),
+
+  paymentDestination: Joi.string()
+    .valid('company_account', 'personal_account')
+    .default('company_account'),
+
+  providerId: Joi.string()
+    .hex()
+    .length(24)
+    .allow(null, '')
+    .empty(['', null])
+    .optional(),
+
+  shopId: Joi.string()
+    .hex()
+    .length(24)
+    .allow(null, '')
+    .empty(['', null])
+    .optional(),
+})
+.xor('bookingId', 'orderId')  // EXACTLY one required
+.messages({
+  'object.xor': 'Send ONLY bookingId (service) OR ONLY orderId (shop)'
+}),  
   // Collection QR
   collectionQR: Joi.object({
     paymentId: Joi.string().hex().length(24).required(),
@@ -20,29 +50,100 @@ const paymentSchemas = {
   
   // Razorpay Order
   createRazorpayOrder: Joi.object({
-    bookingId: Joi.string().hex().length(24).required(),
-    amount: Joi.number().positive().required(),
-    paymentDestination: Joi.string().valid('company_account', 'personal_account').default('company_account')
-  }),
-  
+  bookingId: Joi.string()
+    .hex()
+    .length(24)
+    .allow(null, '')
+    .empty(['', null])
+    .optional(),
+
+  orderId: Joi.string()
+    .hex()
+    .length(24)
+    .allow(null, '')
+    .empty(['', null])
+    .optional(),
+
+  amount: Joi.number().positive().required(),
+
+  paymentDestination: Joi.string()
+    .valid('company_account', 'personal_account')
+    .default('company_account'),
+
+  providerId: Joi.string()
+    .hex()
+    .length(24)
+    .allow(null, '')
+    .empty(['', null])
+    .optional(),
+
+  shopId: Joi.string()
+    .hex()
+    .length(24)
+    .allow(null, '')
+    .empty(['', null])
+    .optional(),
+})
+.xor('bookingId', 'orderId') // exactly ONE required
+.messages({
+  'object.xor': 'Send ONLY bookingId OR ONLY orderId'
+}),  
   // Verify Payment
-  verifyPayment: Joi.object({
-    orderId: Joi.string().required(),
-    paymentId: Joi.string().required(),
-    signature: Joi.string().required(),
-    bookingId: Joi.string().hex().length(24).required()
-  }),
+ verifyPayment: Joi.object({
+  razorpay_order_id: Joi.string().required(),
+  razorpay_payment_id: Joi.string().required(),
+  razorpay_signature: Joi.string().required(),
+
+  bookingId: Joi.string()
+    .hex()
+    .length(24)
+    .allow(null, '')
+    .optional(),
+
+  orderId: Joi.string()
+    .hex()
+    .length(24)
+    .allow(null, '')
+    .optional(),
+
+  providerId: Joi.string()
+    .hex()
+    .length(24)
+    .allow(null, '')
+    .optional(),
+
+  shopId: Joi.string()
+    .hex()
+    .length(24)
+    .allow(null, '')
+    .optional(),
+})
+.xor('bookingId', 'orderId')  
+.messages({
+  'object.xor': 'Send ONLY bookingId OR ONLY orderId while verifying'
+}),
   
   // Cash Payment
-  cashPayment: Joi.object({
-    bookingId: Joi.string().hex().length(24).required(),
-    paymentDestination: Joi.string().valid('company_account', 'personal_account').default('company_account')
-  }),
-  
+ cashPayment: Joi.object({
+  bookingId: Joi.string().hex().length(24).optional(),
+  orderId: Joi.string().hex().length(24).optional(),
+  paymentDestination: Joi.string().valid('company_account', 'personal_account').default('company_account')
+})
+.xor('bookingId', 'orderId')
+.messages({
+  'object.xor': 'Send ONLY bookingId OR ONLY orderId for cash payment'
+}),  
   // Refund
-  refund: Joi.object({
-    reason: Joi.string().min(5).max(500).required()
-  }),
+ refund: Joi.object({
+  reason: Joi.string().min(5).max(500).required(),
+
+  bookingId: Joi.string().hex().length(24).optional(),
+  orderId: Joi.string().hex().length(24).optional(),
+})
+.xor('bookingId', 'orderId')
+.messages({
+  'object.xor': 'Refund must be for booking OR order'
+}),
   
   // Manual Verification
   manualVerification: Joi.object({

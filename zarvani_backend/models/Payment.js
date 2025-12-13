@@ -101,7 +101,7 @@ const paymentSchema = new mongoose.Schema({
   // ✅ ADDED: Payment type - service or product
   paymentType: {
     type: String,
-    enum: ['service', 'product'],
+    enum: ['service', 'product_order'],
     required: true
   },
   
@@ -247,7 +247,7 @@ const paymentSchema = new mongoose.Schema({
   // Payment details
   paymentMethod: {
     type: String,
-    enum: ['cash', 'upi', 'card', 'netbanking', 'wallet', 'qr'],
+    enum: ['online', 'cash', 'cod', 'upi', 'card', 'netbanking', 'wallet', 'qr'],
     required: true
   },
   
@@ -311,6 +311,9 @@ const paymentSchema = new mongoose.Schema({
 // Indexes for performance
 paymentSchema.index({ user: 1, createdAt: -1 });
 paymentSchema.index({ provider: 1, status: 1 });
+paymentSchema.index({ transactionId: 1 }, { unique: true, sparse: true });
+paymentSchema.index({ gatewayTransactionId: 1 }, { unique: true, sparse: true });
+paymentSchema.index({ 'upiPayment.transactionId': 1 }, { unique: true, sparse: true });
 paymentSchema.index({ shop: 1, status: 1 });
 paymentSchema.index({ 'pendingCommission.status': 1, 'pendingCommission.dueDate': 1 });
 paymentSchema.index({ 'payout.status': 1 });

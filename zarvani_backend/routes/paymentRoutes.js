@@ -14,48 +14,51 @@ router.post('/webhook/upi', paymentController.upiPaymentWebhook);
 // QR Payment Routes
 router.post('/qr/create', 
   protect, 
-  authorize(['user']), 
+  authorize('user'), 
   validatePayment('createQR'), 
   paymentController.createPaymentWithQR
 );
 
 router.get('/qr/status/:paymentId', 
   protect, 
-  authorize(['user', 'provider', 'shop', 'admin']), 
+  authorize('user', 'provider', 'shop', 'admin'), 
   paymentController.getQRPaymentStatus
 );
 
 // UPI Deep Link
 router.post('/upi/deeplink', 
   protect, 
-  authorize(['user', 'provider', 'shop']), 
+  authorize('user', 'provider', 'shop'), 
   paymentController.generateUPIDeepLink
 );
 
 // Payment History & Details
 router.get('/history', 
   protect, 
-  authorize(['user']), 
+  authorize('user'), 
   paymentController.getPaymentHistory
 );
 
 router.get('/details/:id', 
   protect, 
-  authorize(['user', 'provider', 'shop', 'admin']), 
+  authorize('user', 'provider', 'shop', 'admin'), 
   paymentController.getPaymentDetails
 );
+router.put('/update/:entityId', protect, paymentController.updatePaymentStatus);
+
+router.get('/status/:paymentId', protect, paymentController.checkPaymentStatus);
 
 // Razorpay Integration
 router.post('/razorpay/create', 
   protect, 
-  authorize(['user']), 
+  authorize('user'), 
   validatePayment('createRazorpayOrder'), 
   paymentController.createOrder
 );
 
 router.post('/razorpay/verify', 
   protect, 
-  authorize(['user']), 
+  authorize('user'), 
   validatePayment('verifyPayment'), 
   paymentController.verifyPayment
 );
@@ -63,7 +66,7 @@ router.post('/razorpay/verify',
 // Cash Payment
 router.post('/cash', 
   protect, 
-  authorize(['user']), 
+  authorize('user'), 
   validatePayment('cashPayment'), 
   paymentController.cashPayment
 );
@@ -71,7 +74,7 @@ router.post('/cash',
 // Refund Request
 router.post('/:id/refund', 
   protect, 
-  authorize(['user']), 
+  authorize('user'), 
   validatePayment('refund'), 
   paymentController.initiateRefund
 );
@@ -81,7 +84,7 @@ router.post('/:id/refund',
 // Collection QR
 router.post('/provider/qr/collection', 
   protect, 
-  authorize(['provider']), 
+  authorize('provider'), 
   validatePayment('collectionQR'), 
   paymentController.generateCollectionQR
 );
@@ -89,14 +92,14 @@ router.post('/provider/qr/collection',
 // Provider Earnings
 router.get('/provider/earnings', 
   protect, 
-  authorize(['provider']), 
+  authorize('provider'), 
   paymentController.getProviderEarnings
 );
 
 // Provider Commission Summary
 router.get('/provider/commission/summary', 
   protect, 
-  authorize(['provider']), 
+  authorize('provider'), 
   paymentController.getOwnerCommissionSummary
 );
 
@@ -105,7 +108,7 @@ router.get('/provider/commission/summary',
 // Collection QR
 router.post('/shop/qr/collection', 
   protect, 
-  authorize(['shop']), 
+  authorize('shop'), 
   validatePayment('collectionQR'), 
   paymentController.generateCollectionQR
 );
@@ -113,21 +116,21 @@ router.post('/shop/qr/collection',
 // Shop Earnings
 router.get('/shop/earnings', 
   protect, 
-  authorize(['shop']), 
+  authorize('shop'), 
   paymentController.getShopEarnings
 );
 
 // Shop Commission Summary
 router.get('/shop/commission/summary', 
   protect, 
-  authorize(['shop']), 
+  authorize('shop'), 
   paymentController.getOwnerCommissionSummary
 );
 
 // Unified Owner Earnings (for both provider/shop)
 router.get('/owner/earnings', 
   protect, 
-  authorize(['provider', 'shop']), 
+  authorize('provider', 'shop'), 
   paymentController.getOwnerEarnings
 );
 
@@ -136,19 +139,19 @@ router.get('/owner/earnings',
 // Commission Management
 router.get('/admin/commissions/pending', 
   protect, 
-  authorize(['admin']), 
+  authorize('admin'), 
   paymentController.getPendingCommissions
 );
 
 router.get('/admin/commissions/overdue', 
   protect, 
-  authorize(['admin']), 
+  authorize('admin'), 
   paymentController.getOverdueCommissions
 );
 
 router.post('/admin/commissions/mark-paid', 
   protect, 
-  authorize(['admin']), 
+  authorize('admin'), 
   validatePayment('markCommissionPaid'), 
   paymentController.markCommissionPaid
 );
@@ -156,7 +159,7 @@ router.post('/admin/commissions/mark-paid',
 // Manual Payment Verification
 router.post('/admin/verify/manual', 
   protect, 
-  authorize(['admin']), 
+  authorize('admin'), 
   validatePayment('manualVerification'), 
   paymentController.verifyManualUPIPayment
 );
@@ -164,26 +167,26 @@ router.post('/admin/verify/manual',
 // Analytics & Reports
 router.get('/admin/analytics', 
   protect, 
-  authorize(['admin']), 
+  authorize('admin'), 
   paymentController.getPaymentAnalytics
 );
 
 router.get('/admin/commission/stats', 
   protect, 
-  authorize(['admin']), 
+  authorize('admin'), 
   paymentController.getCommissionStats
 );
 
 router.get('/admin/commission/report', 
   protect, 
-  authorize(['admin']), 
+  authorize('admin'), 
   paymentController.generateCommissionReport
 );
 
 // All Earnings Overview
 router.get('/admin/earnings/overview', 
   protect, 
-  authorize(['admin']), 
+  authorize('admin'), 
   paymentController.getAllEarningsOverview
 );
 
