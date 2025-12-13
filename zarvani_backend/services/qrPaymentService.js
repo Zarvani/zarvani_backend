@@ -49,6 +49,7 @@ class QRPaymentService {
         user: userId,
         provider: providerId,
         shop: shopId,
+        paymentType: data.paymentType,
         amount,
         paymentMethod: 'qr',
         paymentDestination,
