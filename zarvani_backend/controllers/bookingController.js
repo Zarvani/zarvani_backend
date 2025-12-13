@@ -318,18 +318,29 @@ exports.acceptBooking = async (req, res) => {
     // ---------------------------------------------------
     // 3️⃣ Ensure this provider is notified for the booking
     // ---------------------------------------------------
-    if (!booking.notifiedProviders.includes(providerId.toString())) {
+    const notifiedProvider = booking.notifiedProviders.find(
+      np => np.provider.toString() === providerId.toString()
+    );
+
+    if (!notifiedProvider) {
       return res.status(403).json({
         success: false,
         message: "You are not allowed to accept this booking",
       });
     }
 
+    // 4️⃣ Prevent double accept
+    if (notifiedProvider.response !== "pending") {
+      return res.status(400).json({
+        success: false,
+        message: "You already responded to this booking",
+      });
+    }
     // ---------------------------------------------------
     // 4️⃣ Assign provider + update status
     // ---------------------------------------------------
     booking.provider = providerId;
-    booking.status = "accepted";
+    booking.status = "provider-assigned";
     await booking.save();
 
     // ---------------------------------------------------

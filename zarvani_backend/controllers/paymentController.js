@@ -18,24 +18,40 @@ exports.createPaymentWithQR = async (req, res) => {
       amount, 
       paymentDestination = 'company_account',
       providerId,
-      shopId 
+      shopId
     } = req.body;
-    
-    // Validate payment destination
+
+    // -------------------------------
+    // 1️⃣ Validate Payment Destination
+    // -------------------------------
     if (!['company_account', 'personal_account'].includes(paymentDestination)) {
       return ResponseHandler.error(res, 'Invalid payment destination', 400);
     }
-    
+
+    // -------------------------------
+    // 2️⃣ Validate Amount
+    // -------------------------------
     if (!amount || amount <= 0) {
       return ResponseHandler.error(res, 'Valid amount is required', 400);
     }
-    
-    // Validate either booking or order exists
-    if (!bookingId && !orderId) {
-      return ResponseHandler.error(res, 'Either bookingId or orderId is required', 400);
+
+    // ------------------------------------------------
+    // 3️⃣ Validate Exactly ONE of bookingId or orderId
+    // ------------------------------------------------
+    if ((bookingId && orderId) || (!bookingId && !orderId)) {
+      return ResponseHandler.error(
+        res,
+        'Send ONLY bookingId (for service) OR ONLY orderId (for shop)',
+        400
+      );
     }
-    
-    // Generate QR payment
+
+    // Determine payment type
+    const paymentType = bookingId ? 'service' : 'product';
+
+    // -------------------------------
+    // 4️⃣ Generate QR Payment
+    // -------------------------------
     const result = await QRPaymentService.generatePaymentQR({
       bookingId,
       orderId,
@@ -43,32 +59,47 @@ exports.createPaymentWithQR = async (req, res) => {
       userId: req.user._id,
       paymentDestination,
       providerId,
-      shopId
+      shopId,
+      paymentType
     });
-    
+
+    // -------------------------------
+    // 5️⃣ Commission Logic
+    // -------------------------------
+    const commissionRate = (() => {
+      if (paymentDestination === 'company_account') {
+        return paymentType === 'service' ? 15 : 8;
+      } else {
+        return paymentType === 'service' ? 20 : 12;
+      }
+    })();
+
     ResponseHandler.success(res, {
       paymentId: result.payment._id,
       transactionId: result.payment.transactionId,
+
       qrCode: result.qrData.qrImageUrl,
       upiDeepLink: result.qrData.upiDeepLink,
       upiId: result.qrData.upiId,
       amount: result.qrData.amount,
       expiresAt: result.qrData.expiresAt,
-      paymentDestination: result.payment.paymentDestination,
-      paymentType: result.payment.paymentType,
+
+      paymentDestination,
+      paymentType,
+
       commission: {
-        rate: result.payment.paymentDestination === 'company_account' ? 
-              (result.payment.paymentType === 'service' ? 15 : 8) :
-              (result.payment.paymentType === 'service' ? 20 : 12),
+        rate: commissionRate,
         amount: result.payment.totalCommission,
         netEarning: result.payment.netEarning
       }
     }, 'QR payment generated successfully');
+
   } catch (error) {
     logger.error(`Create payment with QR error: ${error.message}`);
     ResponseHandler.error(res, error.message, 500);
   }
 };
+
 
 // ✅ NEW: Generate collection QR for provider/shop
 exports.generateCollectionQR = async (req, res) => {
@@ -522,126 +553,384 @@ exports.getPaymentAnalytics = async (req, res) => {
 // Create Razorpay Order (Updated for commission tracking)
 exports.createOrder = async (req, res) => {
   try {
-    const { bookingId, amount, paymentDestination = 'company_account' } = req.body;
-    
-    const booking = await Booking.findById(bookingId);
-    
-    if (!booking) {
-      return ResponseHandler.error(res, 'Booking not found', 404);
+    const {
+      bookingId,
+      orderId,
+      amount,
+      paymentDestination = "company_account"
+    } = req.body;
+
+    // Validate input
+    if (!bookingId && !orderId) {
+      return ResponseHandler.error(res, "bookingId or orderId is required", 400);
     }
-    
-    if (booking.user.toString() !== req.user._id.toString()) {
-      return ResponseHandler.error(res, 'Not authorized', 403);
+
+    let refDoc = null;
+    let paymentType = null;
+    let providerId = null;
+    let userId = null;
+
+    // -------------------------
+    // 1️⃣ BOOKING PAYMENT FLOW
+    // -------------------------
+    if (bookingId) {
+      refDoc = await Booking.findById(bookingId);
+      if (!refDoc) return ResponseHandler.error(res, "Booking not found", 404);
+
+      if (refDoc.user.toString() !== req.user._id.toString()) {
+        return ResponseHandler.error(res, "Not authorized", 403);
+      }
+
+      paymentType = "service"; // booking = service payment
+      providerId = refDoc.provider;
+      userId = refDoc.user;
     }
-    
+
+    // -------------------------
+    // 2️⃣ ORDER PAYMENT FLOW
+    // -------------------------
+    if (orderId) {
+      refDoc = await Order.findById(orderId);
+      if (!refDoc) return ResponseHandler.error(res, "Order not found", 404);
+
+      if (refDoc.user.toString() !== req.user._id.toString()) {
+        return ResponseHandler.error(res, "Not authorized", 403);
+      }
+
+      paymentType = "product_order"; // product purchase
+      providerId = null; // orders may not have provider
+      userId = refDoc.user;
+    }
+
+    // Create Razorpay Order
     const receipt = `RCPT-${Date.now()}`;
-    const order = await PaymentService.createRazorpayOrder(amount, 'INR', receipt);
-    
+    const order = await PaymentService.createRazorpayOrder(amount, "INR", receipt);
+
     if (!order.success) {
-      return ResponseHandler.error(res, 'Failed to create order', 500);
+      return ResponseHandler.error(res, "Failed to create order", 500);
     }
-    
-    // Create payment record with commission tracking
+
+    // Create Payment record
     const payment = await Payment.create({
       transactionId: order.order.id,
-      booking: bookingId,
-      user: req.user._id,
-      provider: booking.provider,
+      booking: bookingId || null,
+      order: orderId || null,
+      user: userId,
+      provider: providerId,
       amount,
-      paymentMethod: 'upi',
-      paymentGateway: 'razorpay',
+      paymentMethod: "upi",
+      paymentGateway: "razorpay",
       paymentDestination,
-      paymentType: 'service',
-      status: 'pending'
+      paymentType, // service / product_order
+      status: "pending"
     });
-    
+
     // Calculate commission
     await payment.calculateCommission();
     await payment.save();
-    
-    ResponseHandler.success(res, {
-      orderId: order.order.id,
-      amount: order.order.amount,
-      currency: order.order.currency,
-      paymentId: payment._id,
-      paymentDestination,
-      commission: {
-        rate: payment.paymentDestination === 'company_account' ? 15 : 20,
-        amount: payment.totalCommission
-      }
-    }, 'Order created successfully');
+
+    ResponseHandler.success(
+      res,
+      {
+        orderId: order.order.id,
+        amount: order.order.amount,
+        currency: order.order.currency,
+        paymentId: payment._id,
+        paymentDestination,
+        commission: {
+          rate: payment.paymentDestination === "company_account" ? 15 : 20,
+          amount: payment.totalCommission
+        }
+      },
+      "Order created successfully"
+    );
   } catch (error) {
     logger.error(`Create order error: ${error.message}`);
     ResponseHandler.error(res, error.message, 500);
   }
 };
 
-// Verify Payment (Updated)
 exports.verifyPayment = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
-    const { orderId, paymentId, signature, bookingId } = req.body;
-    
-    const isValid = PaymentService.verifyRazorpaySignature(orderId, paymentId, signature);
-    
-    if (!isValid) {
-      return ResponseHandler.error(res, 'Invalid payment signature', 400);
+    const {
+      razorpay_order_id,
+      razorpay_payment_id,
+      razorpay_signature,
+      bookingId,
+      orderId,
+      paymentMethod = 'online'
+    } = req.body;
+
+    // 1️⃣ Validate required fields
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      await session.abortTransaction();
+      return ResponseHandler.error(res, "Missing Razorpay details", 400);
     }
-    
-    // Update payment status
-    const payment = await Payment.findOneAndUpdate(
-      { transactionId: orderId },
-      {
-        status: 'success',
-        gatewayTransactionId: paymentId,
-        paymentDate: new Date(),
-        verified: true
-      },
-      { new: true }
+
+    if (!bookingId && !orderId) {
+      await session.abortTransaction();
+      return ResponseHandler.error(res, "Send bookingId OR orderId", 400);
+    }
+
+    // 2️⃣ Verify signature
+    const isValid = PaymentService.verifyRazorpaySignature(
+      razorpay_order_id,
+      razorpay_payment_id,
+      razorpay_signature
     );
-    
-    if (!payment) {
-      return ResponseHandler.error(res, 'Payment not found', 404);
+
+    if (!isValid) {
+      await session.abortTransaction();
+      return ResponseHandler.error(res, "Invalid payment signature", 400);
     }
+
+    // 3️⃣ Check if payment already exists
+    let payment = await Payment.findOne({
+      $or: [
+        { transactionId: razorpay_order_id },
+        { gatewayTransactionId: razorpay_payment_id }
+      ]
+    }).session(session);
+
+    let entity = null;
+    let entityType = null;
+    let updatedEntity = null;
+
+    // 4️⃣ Process based on entity type (Booking or Order)
+    if (bookingId) {
+      entity = await Booking.findById(bookingId).session(session);
+      entityType = 'booking';
+      
+      if (!entity) {
+        await session.abortTransaction();
+        return ResponseHandler.error(res, "Booking not found", 404);
+      }
+
+      // Verify user authorization
+      if (entity.user.toString() !== req.user._id.toString()) {
+        await session.abortTransaction();
+        return ResponseHandler.error(res, "Not authorized for this booking", 403);
+      }
+    } else if (orderId) {
+      entity = await Order.findById(orderId).session(session);
+      entityType = 'order';
+      
+      if (!entity) {
+        await session.abortTransaction();
+        return ResponseHandler.error(res, "Order not found", 404);
+      }
+
+      // Verify user authorization
+      if (entity.user.toString() !== req.user._id.toString()) {
+        await session.abortTransaction();
+        return ResponseHandler.error(res, "Not authorized for this order", 403);
+      }
+    }
+
+    // 5️⃣ Check if payment is already marked as paid in the entity
+    if (entity.payment && entity.payment.status === 'paid') {
+      await session.abortTransaction();
+      return ResponseHandler.success(res, {
+        message: 'Payment already completed',
+        entityType,
+        entityId: entity._id,
+        entityStatus: entity.status
+      }, 'Payment already marked as paid');
+    }
+
+    // 6️⃣ Create or update payment record
+    if (payment) {
+      // Update existing payment
+      payment.status = 'success';
+      payment.paymentDate = new Date();
+      payment.verified = true;
+      payment.gatewayTransactionId = razorpay_payment_id;
+      payment.paymentMethod = paymentMethod;
+      
+      // Link entity if not already linked
+      if (entityType === 'booking' && !payment.booking) {
+        payment.booking = bookingId;
+        payment.provider = entity.provider;
+        payment.paymentType = 'service';
+      } else if (entityType === 'order' && !payment.order) {
+        payment.order = orderId;
+        payment.shop = entity.shop;
+        payment.paymentType = 'product_order';
+      }
+      
+      await payment.save({ session });
+    } else {
+      // Create new payment record
+      const paymentData = {
+        transactionId: razorpay_order_id,
+        user: req.user._id,
+        amount: entityType === 'booking' ? entity.totalAmount : entity.pricing.totalAmount,
+        paymentMethod: paymentMethod,
+        paymentGateway: 'razorpay',
+        paymentDestination: 'company_account',
+        status: 'success',
+        gatewayTransactionId: razorpay_payment_id,
+        paymentDate: new Date(),
+        verified: true,
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'],
+        createdBy: req.user._id
+      };
+
+      if (entityType === 'booking') {
+        paymentData.booking = bookingId;
+        paymentData.provider = entity.provider;
+        paymentData.paymentType = 'service';
+      } else {
+        paymentData.order = orderId;
+        paymentData.shop = entity.shop;
+        paymentData.paymentType = 'product_order';
+      }
+
+      payment = new Payment(paymentData);
+      await payment.save({ session });
+    }
+
+    // 7️⃣ Calculate commission
+    await payment.calculateCommission();
+    await payment.save({ session });
+
+    // 8️⃣ ✅ CRITICAL: Update ONLY payment status and method in entity
+    // DO NOT change the main entity status (confirmed, ready, out_for_delivery, etc.)
     
-    // Process commission based on payment destination
+    if (entityType === 'booking') {
+      // Update only payment info in booking
+      entity.payment = {
+        ...entity.payment, // Keep existing payment properties
+        method: paymentMethod,
+        status: 'paid',
+        transactionId: razorpay_payment_id,
+        gateway: 'razorpay',
+        paidAt: new Date(),
+        _id: payment._id
+      };
+      
+      // ✅ Do NOT change booking.status unless it's specifically needed
+      // Only mark payment as paid, keep booking status as is
+      
+      // Add payment reference if not present
+      if (!entity.paymentReference) {
+        entity.paymentReference = payment._id;
+      }
+      
+      await entity.save({ session });
+      updatedEntity = entity;
+      
+    } else if (entityType === 'order') {
+      // Update only payment info in order
+      entity.payment = {
+        ...entity.payment, // Keep existing payment properties
+        method: paymentMethod,
+        status: 'paid',
+        transactionId: razorpay_payment_id,
+        gateway: 'razorpay',
+        paidAt: new Date(),
+        _id: payment._id
+      };
+      
+      // ✅ Do NOT change order.status unless specifically needed
+      // Payment can happen at various stages (confirmed, preparing, ready, etc.)
+      
+      // For COD orders being converted to online, update payment method only
+      // Status remains as whatever it was (confirmed, preparing, etc.)
+      
+      await entity.save({ session });
+      updatedEntity = entity;
+    }
+
+    // 9️⃣ Handle commission based on payment destination
     if (payment.paymentDestination === 'company_account') {
       await payment.initiatePayout();
     } else {
       await payment.recordPendingCommission();
     }
-    
-    // Update booking
-    const booking = await Booking.findByIdAndUpdate(
-      bookingId,
-      {
-        payment: payment._id,
-        status: 'confirmed'
-      },
-      { new: true }
-    ).populate('service provider user');
-    
-    // Send confirmation email
-    const EmailService = require('../services/emailService');
-    if (booking.user.email) {
-      await EmailService.sendBookingConfirmation(booking.user.email, {
-        userName: booking.user.name,
-        bookingId: booking.bookingId,
-        serviceName: booking.serviceDetails.title,
-        date: booking.scheduledDate,
-        time: booking.scheduledTime,
-        providerName: booking.provider.name,
-        amount: booking.totalAmount,
+
+    // 🔟 Commit transaction
+    await session.commitTransaction();
+
+    // 1️⃣1️⃣ Send notifications
+    try {
+      const amount = entityType === 'booking' ? entity.totalAmount : entity.pricing.totalAmount;
+      const entityId = entityType === 'booking' ? entity.bookingId : entity.orderId;
+      
+      // Send push notification to user
+      await PushNotificationService.sendToUser(
+        req.user._id,
+        "Payment Successful",
+        `Your payment of ₹${amount} for ${entityType} #${entityId} was successful.`
+      );
+
+      // Notify provider/shop about payment
+      if (entityType === 'booking' && entity.provider) {
+        await PushNotificationService.sendToProvider(
+          entity.provider,
+          "Payment Received",
+          `Payment of ₹${amount} received for booking #${entity.bookingId}.`
+        );
+      } else if (entityType === 'order' && entity.shop) {
+        await PushNotificationService.sendToShop(
+          entity.shop,
+          "Payment Received",
+          `Payment of ₹${amount} received for order #${entity.orderId}.`
+        );
+      }
+    } catch (notifError) {
+      logger.error(`Notification failed: ${notifError.message}`);
+      // Don't fail the transaction for notification errors
+    }
+
+    // 1️⃣2️⃣ Prepare response
+    const response = {
+      success: true,
+      message: 'Payment verified successfully',
+      payment: {
+        id: payment._id,
+        transactionId: payment.transactionId,
+        amount: payment.amount,
+        status: payment.status,
+        paymentMethod: payment.paymentMethod,
         paymentDestination: payment.paymentDestination,
         commission: payment.totalCommission
-      });
-    }
-    
-    ResponseHandler.success(res, { payment, booking }, 'Payment verified successfully');
+      },
+      entity: {
+        type: entityType,
+        id: entity._id,
+        entityId: entityType === 'booking' ? entity.bookingId : entity.orderId,
+        // Return current status (unchanged)
+        status: entity.status,
+        // Return updated payment info
+        payment: {
+          method: entity.payment.method,
+          status: entity.payment.status,
+          paidAt: entity.payment.paidAt
+        }
+      }
+    };
+
+    ResponseHandler.success(res, response, 'Payment verified successfully');
+
   } catch (error) {
-    logger.error(`Verify payment error: ${error.message}`);
+    await session.abortTransaction();
+    logger.error(`Verify payment error: ${error.message}`, { 
+      stack: error.stack,
+      userId: req.user?._id,
+      Booking,
+      Order
+    });
     ResponseHandler.error(res, error.message, 500);
+  } finally {
+    session.endSession();
   }
 };
+
 
 // Get Payment History (Updated)
 exports.getPaymentHistory = async (req, res) => {
@@ -1310,5 +1599,299 @@ async function calculateSuperAdminStats(period, type = 'all') {
     collectionRate: totalCommission > 0 ? ((totalCommission - pendingCommission) / totalCommission) * 100 : 0
   };
 }
+const ORDER_PAYMENT_METHODS = ["cod", "online", "wallet"];
+const DEFAULT_PAYMENT_METHOD = "online";
+
+exports.updatePaymentStatus = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { entityId } = req.params;
+    const { paymentId, paymentStatus = "paid" } = req.body;
+
+    if (!entityId || !paymentId) {
+      await session.abortTransaction();
+      return ResponseHandler.error(res, "Missing entityId or paymentId", 400);
+    }
+
+    if (paymentStatus !== "paid") {
+      await session.abortTransaction();
+      return ResponseHandler.error(res, "Invalid payment status", 400);
+    }
+
+    // 🔴 CRITICAL FIX: First check if payment already exists with this transactionId
+    const existingPayment = await Payment.findOne({
+      $or: [
+        { transactionId: paymentId },
+        { gatewayTransactionId: paymentId }
+      ]
+    }).session(session);
+
+    // If payment already exists and is successful, abort
+    if (existingPayment && existingPayment.status === "success") {
+      await session.abortTransaction();
+      
+      // Still update the entity to link the payment if not already linked
+      let entity = await Order.findById(entityId).session(session);
+      let entityType = "order";
+      
+      if (!entity) {
+        entity = await Booking.findById(entityId).session(session);
+        entityType = "booking";
+      }
+      
+      if (entity && (!entity.payment?._id || entity.payment._id.toString() !== existingPayment._id.toString())) {
+        entity.payment = {
+          ...entity.payment,
+          _id: existingPayment._id,
+          method: existingPayment.paymentMethod,
+          status: "paid",
+          transactionId: existingPayment.transactionId,
+          gateway: existingPayment.paymentGateway,
+          paidAt: existingPayment.paymentDate || new Date(),
+        };
+        
+        if (entityType === "order" && entity.status === "pending") {
+          entity.status = "confirmed";
+          entity.timestamps = entity.timestamps || {};
+          entity.timestamps.confirmedAt = new Date();
+          entity._updatedBy = "system";
+        }
+        
+        await entity.save({ session });
+        await session.commitTransaction();
+      } else {
+        await session.abortTransaction();
+      }
+      
+      return ResponseHandler.success(
+        res,
+        { 
+          success: true, 
+          message: "Payment already completed",
+          paymentId: existingPayment._id 
+        },
+        "Payment already completed"
+      );
+    }
+
+    // Detect entity: Order or Booking
+    let entity = await Order.findById(entityId).session(session);
+    let entityType = "order";
+
+    if (!entity) {
+      entity = await Booking.findById(entityId).session(session);
+      entityType = "booking";
+    }
+
+    if (!entity) {
+      await session.abortTransaction();
+      return ResponseHandler.error(res, "Entity not found", 404);
+    }
+
+    // Determine payment method
+    let paymentMethod = entity.payment?.method || DEFAULT_PAYMENT_METHOD;
+
+    // Map unsupported methods to 'online' for order/booking
+    if (!ORDER_PAYMENT_METHODS.includes(paymentMethod)) {
+      paymentMethod = DEFAULT_PAYMENT_METHOD;
+    }
+
+    const gateway = "razorpay";
+
+    // Update embedded payment object in entity
+    entity.payment = {
+      ...entity.payment,
+      method: paymentMethod,
+      status: "paid",
+      transactionId: paymentId,
+      gateway,
+      paidAt: new Date(),
+    };
+
+    // Auto-confirm order if applicable
+    if (entityType === "order" && paymentMethod !== "cod" && entity.status === "pending") {
+      entity.status = "confirmed";
+      entity.timestamps = entity.timestamps || {};
+      entity.timestamps.confirmedAt = new Date();
+      entity._updatedBy = "system";
+    }
+
+    // 🔴 CRITICAL FIX 2: Update existing payment if found (partial record)
+    let paymentRecord;
+    if (existingPayment) {
+      // Update existing payment (partial record created by createOrder)
+      existingPayment.status = "success";
+      existingPayment.paymentDate = new Date();
+      existingPayment.verified = true;
+      existingPayment.gatewayTransactionId = paymentId;
+      
+      // Link entity if not already linked
+      if (entityType === "order" && !existingPayment.order) {
+        existingPayment.order = entity._id;
+        existingPayment.shop = entity.shop;
+      } else if (entityType === "booking" && !existingPayment.booking) {
+        existingPayment.booking = entity._id;
+        existingPayment.provider = entity.provider;
+      }
+      
+      // Update commission if needed
+      await existingPayment.calculateCommission();
+      
+      paymentRecord = existingPayment;
+      await paymentRecord.save({ session });
+    } else {
+      // Create new payment record (only if doesn't exist anywhere)
+      const paymentRecordData = {
+        user: entity.user,
+        amount: entityType === "order" ? entity.pricing.totalAmount : entity.totalAmount,
+        transactionId: paymentId,
+        paymentMethod,
+        paymentGateway: gateway,
+        paymentDestination: "company_account",
+        paymentType: entityType === "order" ? "product_order" : "service",
+        status: "success",
+        paymentDate: new Date(),
+        verified: true,
+      };
+
+      if (entityType === "order") {
+        paymentRecordData.order = entity._id;
+        paymentRecordData.shop = entity.shop;
+      } else {
+        paymentRecordData.booking = entity._id;
+        paymentRecordData.provider = entity.provider;
+      }
+
+      paymentRecord = new Payment(paymentRecordData);
+      await paymentRecord.save({ session });
+    }
+
+    // Link the payment ID to the entity
+    entity.payment._id = paymentRecord._id;
+    
+    await entity.save({ session });
+    await session.commitTransaction();
+
+    // Send notification
+    try {
+      const amount = entityType === "order" ? entity.pricing.totalAmount : entity.totalAmount;
+      const id = entityType === "order" ? entity.orderId : entity.bookingId;
+
+      await PushNotificationService.sendToUser(
+        entity.user,
+        "Payment Successful",
+        `Payment of ₹${amount} for ${entityType} #${id} was successful.`
+      );
+    } catch (err) {
+      console.error("Push notification failed:", err.message);
+    }
+
+    // Return response
+    return ResponseHandler.success(
+      res,
+      {
+        success: true,
+        entityType,
+        entityId: entity._id,
+        paymentId: paymentRecord._id,
+        paymentStatus: paymentRecord.status,
+        paymentMethod: paymentRecord.paymentMethod,
+        transactionId: paymentRecord.transactionId,
+      },
+      "Payment updated successfully"
+    );
+  } catch (err) {
+    await session.abortTransaction();
+    console.error("Payment update failed:", err);
+    return ResponseHandler.error(res, err.message || "Internal Server Error", 500);
+  } finally {
+    session.endSession();
+  }
+};
+
+exports.checkPaymentStatus = async (req, res) => {
+  try {
+    const { paymentId } = req.params;
+    
+    const payment = await Payment.findOne({ 
+      $or: [
+        { transactionId: paymentId },
+        { 'upiPayment.transactionId': paymentId },
+        { gatewayTransactionId: paymentId }
+      ]
+    })
+    .populate('order', 'orderId status payment')
+    .populate('booking', 'bookingId status payment');
+
+    if (!payment) {
+      return ResponseHandler.error(res, 'Payment not found', 404);
+    }
+
+    ResponseHandler.success(res, { payment }, 'Payment details retrieved');
+    
+  } catch (error) {
+    logger.error(`Check payment error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+exports.paymentWebhook = async (req, res) => {
+  try {
+    const { event, payload } = req.body;
+
+    if (event === 'payment.captured' && payload.payment?.entity) {
+      const paymentEntity = payload.payment.entity;
+      
+      // Check if payment already exists with either transactionId or gatewayTransactionId
+      const existingPayment = await Payment.findOne({
+        $or: [
+          { gatewayTransactionId: paymentEntity.id },
+          { transactionId: paymentEntity.order_id }
+        ]
+      });
+
+      if (existingPayment) {
+        // Payment already exists, just update it
+        if (existingPayment.status !== 'success') {
+          existingPayment.status = 'success';
+          existingPayment.paymentDate = new Date();
+          existingPayment.gatewayTransactionId = paymentEntity.id;
+          await existingPayment.save();
+        }
+        
+        // Update linked entity (booking/order) if not already updated
+        if (existingPayment.booking) {
+          const booking = await Booking.findById(existingPayment.booking);
+          if (booking && booking.payment?.status !== 'paid') {
+            await Booking.findByIdAndUpdate(existingPayment.booking, {
+              'payment.status': 'paid',
+              'payment.paidAt': new Date(),
+              status: 'confirmed'
+            });
+          }
+        }
+        if (existingPayment.order) {
+          const order = await Order.findById(existingPayment.order);
+          if (order && order.payment?.status !== 'paid') {
+            await Order.findByIdAndUpdate(existingPayment.order, {
+              'payment.status': 'paid',
+              'payment.paidAt': new Date(),
+              status: 'confirmed'
+            });
+          }
+        }
+      }
+      // If no existing payment, DO NOT CREATE ONE here
+      // Wait for updatePaymentStatus to be called
+    }
+
+    res.status(200).json({ success: true });
+  } catch (error) {
+    logger.error(`Payment webhook error: ${error.message}`);
+    res.status(200).json({ success: false }); // Always return 200 to webhook
+  }
+};
 
 module.exports = exports;

@@ -131,9 +131,23 @@ const bookingSchema = new mongoose.Schema({
     enum: ['user', 'provider', 'shop', 'admin', 'system']
   },
   payment: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Payment'
+  method: {
+    type: String,
+    enum: ['cod', 'online', 'wallet','upi'],
+    default:'cod'
   },
+  status: {
+    type: String,
+    enum: ['pending', 'paid', 'failed', 'refunded', 'partially_refunded'],
+    default: 'pending'
+  },
+  transactionId: String,         // Razorpay payment_id or Stripe txn id            // Razorpay order_id (if using)
+  gateway: String,               // razorpay, stripe, cashfree, phonepe
+  paidAt: Date,
+  refundId: String,              // Refund reference from gateway
+  refundAmount: Number,
+  refundedAt: Date,
+},
   totalAmount: {
     type: Number,
     required: true
