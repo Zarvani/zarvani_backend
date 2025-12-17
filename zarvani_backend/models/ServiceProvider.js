@@ -204,7 +204,28 @@ const serviceProviderSchema = new mongoose.Schema({
     attempts: { type: Number, default: 0 }
   },
   resetPasswordToken: String,
-  resetPasswordExpire: Date
+  resetPasswordExpire: Date,
+  earnings: {
+    total: { type: Number, default: 0 },          // Total earnings from all services
+    lastUpdated: { type: Date, default: Date.now }
+  },
+  
+  // ✅ ADD: Commission tracking separately
+  commission: {
+    due: { type: Number, default: 0 },            // Total commission due to company
+    paid: { type: Number, default: 0 },           // Total commission paid to company
+    lastPaymentDate: Date
+  },
+  
+  // ✅ ADD: Bank/UPI details for auto-payout
+  bankDetails: {
+    upiId: String,
+    accountHolderName: String,
+    accountNumber: String,
+    ifscCode: String,
+    bankName: String,
+    branch: String
+  },
 }, {
   timestamps: true
 });

@@ -130,24 +130,42 @@ const bookingSchema = new mongoose.Schema({
     type: String,
     enum: ['user', 'provider', 'shop', 'admin', 'system']
   },
-  payment: {
-  method: {
-    type: String,
-    enum: ['cod', 'online', 'wallet','upi'],
-    default:'cod'
+ payment: {
+    method: {
+      type: String,
+      enum: ['cod', 'online', 'wallet', 'upi', 'cash', 'personal_upi'],
+      default: 'cod'
+    },
+    status: {
+      type: String,
+      enum: ['pending', 'paid', 'failed', 'refunded', 'partially_refunded'],
+      default: 'pending'
+    },
+    transactionId: String,
+    gateway: String,
+    paidAt: Date,
+    refundId: String,
+    refundAmount: Number,
+    refundedAt: Date,
+    
+    // ✅ ADD THESE NEW FIELDS:
+    receivedBy: {
+      type: String,
+      enum: ['company', 'provider', 'shop'],
+      default: 'company'
+    },
+    commissionStatus: {
+      type: String,
+      enum: ['not_applicable', 'pending', 'paid', 'overdue'],
+      default: 'not_applicable'
+    },
+    commissionAmount: {
+      type: Number,
+      default: 0
+    },
+    commissionPaidAt: Date,
+    commissionDueDate: Date
   },
-  status: {
-    type: String,
-    enum: ['pending', 'paid', 'failed', 'refunded', 'partially_refunded'],
-    default: 'pending'
-  },
-  transactionId: String,         // Razorpay payment_id or Stripe txn id            // Razorpay order_id (if using)
-  gateway: String,               // razorpay, stripe, cashfree, phonepe
-  paidAt: Date,
-  refundId: String,              // Refund reference from gateway
-  refundAmount: Number,
-  refundedAt: Date,
-},
   totalAmount: {
     type: Number,
     required: true

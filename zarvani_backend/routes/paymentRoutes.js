@@ -47,7 +47,10 @@ router.get('/details/:id',
 router.put('/update/:entityId', protect, paymentController.updatePaymentStatus);
 
 router.get('/status/:paymentId', protect, paymentController.checkPaymentStatus);
-
+router.post('/commission/pay/:paymentId', authorize('provider', 'shop'), paymentController.payCommission);
+router.get('/commissions/pending', authorize('provider', 'shop'), paymentController.getMyPendingCommissions);
+router.get('/admin/commissions/stats',authorize('admin'),paymentController.getCommissionStats);
+router.get('/admin/commissions/pending',authorize('admin'),paymentController.getAllPendingCommissions);
 // Razorpay Integration
 router.post('/razorpay/create', 
   protect, 

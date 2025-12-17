@@ -15,7 +15,8 @@ router.get('/:id/tracking',  bookingController.getTrackingInfo);
 router.get('/:id/acceptance-status',  authorize('user'), bookingController.getBookingAcceptanceStatus);
 router.post('/:id/cancel',  authorize('user'), bookingController.cancelBooking);
 router.post('/:id/resend-notifications',  authorize('user'), bookingController.resendProviderNotifications);
-
+router.put('/:id/mark-paid', authorize('provider'), bookingController.markBookingPaid);
+router.get('/commissions/summary', authorize('provider'), bookingController.getProviderCommissionSummary);
 // Provider routes
 router.get('/provider/pending-requests',  authorize('provider'), bookingController.getPendingRequests);
 router.get('/provider/stats',  authorize('provider'), bookingController.getProviderStats);

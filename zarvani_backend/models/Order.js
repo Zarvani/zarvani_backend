@@ -145,7 +145,7 @@ const orderSchema = new mongoose.Schema({
   payment: {
     method: {
       type: String,
-      enum: ['cod', 'online', 'wallet','upi'],
+      enum: ['cod', 'online', 'wallet', 'upi', 'cash', 'personal_upi'],
       required: true
     },
     status: {
@@ -157,7 +157,25 @@ const orderSchema = new mongoose.Schema({
     gateway: String,
     paidAt: Date,
     refundId: String,
-    refundedAt: Date
+    refundedAt: Date,
+    
+    // ✅ ADD THESE NEW FIELDS:
+    receivedBy: {
+      type: String,
+      enum: ['company', 'provider', 'shop'],
+      default: 'company'
+    },
+    commissionStatus: {
+      type: String,
+      enum: ['not_applicable', 'pending', 'paid', 'overdue'],
+      default: 'not_applicable'
+    },
+    commissionAmount: {
+      type: Number,
+      default: 0
+    },
+    commissionPaidAt: Date,
+    commissionDueDate: Date
   },
 
   // Cancellation/Rejection

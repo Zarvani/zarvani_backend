@@ -1371,6 +1371,214 @@ exports.cashPayment = async (req, res) => {
     ResponseHandler.error(res, error.message, 500);
   }
 };
+// ==================== PAY COMMISSION (PROVIDER/SHOP PAYS COMMISSION) ====================
+// ✅ Pay commission (provider/shop pays commission)
+exports.payCommission = async (req, res) => {
+    try {
+        const { paymentId } = req.params;
+        const { paymentMethod, transactionId, screenshotUrl } = req.body;
+        
+        const user = req.user;
+        const isProvider = user.role === 'provider';
+        const isShop = user.role === 'shop';
+        
+        if (!isProvider && !isShop) {
+            return ResponseHandler.error(res, 'Only providers or shops can pay commission', 403);
+        }
+        
+        const payment = await Payment.findOne({
+            _id: paymentId,
+            ...(isProvider && { provider: user._id }),
+            ...(isShop && { shop: user._id }),
+            paymentDestination: 'personal_account'
+        });
+        
+        if (!payment) {
+            return ResponseHandler.error(res, 'Commission record not found', 404);
+        }
+        
+        const updatedPayment = await CommissionService.markCommissionPaid(paymentId, {
+            paymentMethod,
+            transactionId,
+            screenshotUrl
+        });
+        
+        // Update Booking/Order commission status
+        if (updatedPayment.booking) {
+            await Booking.findByIdAndUpdate(updatedPayment.booking, {
+                'payment.commissionStatus': 'paid',
+                'payment.commissionPaidAt': new Date()
+            });
+        }
+        
+        if (updatedPayment.order) {
+            await Order.findByIdAndUpdate(updatedPayment.order, {
+                'payment.commissionStatus': 'paid',
+                'payment.commissionPaidAt': new Date()
+            });
+        }
+        
+        ResponseHandler.success(res, { 
+            payment: updatedPayment,
+            message: 'Commission paid successfully'
+        }, 'Commission paid');
+        
+    } catch (error) {
+        logger.error(`Pay commission error: ${error.message}`);
+        ResponseHandler.error(res, error.message, 500);
+    }
+};
+
+// ✅ Get commission dashboard for provider/shop
+exports.getCommissionDashboard = async (req, res) => {
+    try {
+        const user = req.user;
+        const isProvider = user.role === 'provider';
+        const isShop = user.role === 'shop';
+        
+        if (!isProvider && !isShop) {
+            return ResponseHandler.error(res, 'Only providers or shops can view commission dashboard', 403);
+        }
+        
+        const ownerId = user._id;
+        const ownerType = isProvider ? 'provider' : 'shop';
+        
+        const summary = await CommissionService.getCommissionSummary(ownerId, ownerType);
+        
+        // Get owner model for total earnings
+        let owner;
+        if (isProvider) {
+            owner = await ServiceProvider.findById(ownerId);
+        } else {
+            owner = await Shop.findById(ownerId);
+        }
+        
+        ResponseHandler.success(res, {
+            dashboard: {
+                commissionRate: isProvider ? '20%' : '12%',
+                ownerType,
+                ownerId: ownerId,
+                updatedAt: new Date()
+            },
+            summary,
+            earnings: {
+                total: owner.earnings.total,
+                commission: {
+                    due: owner.commission.due,
+                    paid: owner.commission.paid,
+                    lastPaymentDate: owner.commission.lastPaymentDate
+                }
+            },
+            pendingCount: summary.pendingCommissions.length,
+            paidCount: summary.paidCommissions.length
+        }, 'Commission dashboard fetched');
+        
+    } catch (error) {
+        logger.error(`Get commission dashboard error: ${error.message}`);
+        ResponseHandler.error(res, error.message, 500);
+    }
+};
+// ==================== GET MY PENDING COMMISSIONS ====================
+exports.getMyPendingCommissions = async (req, res) => {
+  try {
+    const user = req.user;
+    const isProvider = user.role === 'provider';
+    const isShop = user.role === 'shop';
+    
+    if (!isProvider && !isShop) {
+      return ResponseHandler.error(res, 'Only providers or shops can view commissions', 403);
+    }
+    
+    const query = {
+      paymentDestination: 'personal_account',
+      'pendingCommission.status': 'pending',
+      ...(isProvider && { provider: user._id }),
+      ...(isShop && { shop: user._id })
+    };
+    
+    const pendingCommissions = await Payment.find(query)
+      .populate('booking', 'bookingId serviceDetails totalAmount')
+      .populate('order', 'orderId items pricing.totalAmount')
+      .populate('user', 'name phone')
+      .sort({ 'pendingCommission.dueDate': 1 });
+    
+    // Calculate totals
+    const totalDue = pendingCommissions.reduce((sum, p) => sum + p.commission.pendingCommission, 0);
+    
+    ResponseHandler.success(
+      res,
+      {
+        pendingCommissions: pendingCommissions.map(p => ({
+          _id: p._id,
+          transactionId: p.transactionId,
+          amount: p.amount,
+          commission: p.commission.pendingCommission,
+          dueDate: p.pendingCommission.dueDate,
+          daysRemaining: Math.ceil((p.pendingCommission.dueDate - new Date()) / (1000 * 60 * 60 * 24)),
+          ...(p.booking && { 
+            type: 'service',
+            bookingId: p.booking.bookingId,
+            service: p.booking.serviceDetails?.title,
+            customer: p.user?.name 
+          }),
+          ...(p.order && { 
+            type: 'product',
+            orderId: p.order.orderId,
+            customer: p.user?.name 
+          })
+        })),
+        summary: {
+          totalDue,
+          count: pendingCommissions.length,
+          commissionRate: isProvider ? '20%' : '12%'
+        }
+      },
+      'Pending commissions fetched'
+    );
+    
+  } catch (error) {
+    logger.error(`Get pending commissions error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+exports.getCommissionStats = async (req, res) => {
+  try {
+    const { period = 'month' } = req.query;
+
+    const stats = await CommissionService.getCommissionStats(period);
+
+    return ResponseHandler.success(
+      res,
+      stats,
+      'Commission stats fetched'
+    );
+  } catch (error) {
+    return ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+exports.getAllPendingCommissions = async (req, res) => {
+  try {
+    const pendingCommissions = await Payment.find({
+      paymentDestination: 'personal_account',
+      'pendingCommission.status': { $in: ['pending', 'overdue'] }
+    })
+      .populate('provider', 'name phone email')
+      .populate('shop', 'name phone email')
+      .populate('user', 'name phone')
+      .populate('booking', 'bookingId serviceDetails')
+      .populate('order', 'orderId items')
+      .sort({ 'pendingCommission.dueDate': 1 });
+
+    return ResponseHandler.success(
+      res,
+      { pendingCommissions },
+      'Pending commissions fetched'
+    );
+  } catch (error) {
+    return ResponseHandler.error(res, error.message, 500);
+  }
+};
 
 // ============= HELPER FUNCTIONS =============
 
@@ -1893,5 +2101,162 @@ exports.paymentWebhook = async (req, res) => {
     res.status(200).json({ success: false }); // Always return 200 to webhook
   }
 };
+exports.processAutoPayout = async (payment, session) => {
+  try {
+    const isServicePayment = payment.paymentType === 'service';
+    const isProductPayment = payment.paymentType === 'product_order';
+    
+    let owner = null;
+    let ownerModel = null;
+    let commissionRate = 0;
+    let payoutAmount = 0;
+    let commissionAmount = 0;
+    
+    // Get owner and calculate commission
+    if (isServicePayment && payment.provider) {
+      owner = await ServiceProvider.findById(payment.provider).session(session);
+      ownerModel = 'ServiceProvider';
+      commissionRate = 15; // 15% for services (company account)
+      commissionAmount = payment.amount * (commissionRate / 100);
+      payoutAmount = payment.amount - commissionAmount;
+      
+    } else if (isProductPayment && payment.shop) {
+      owner = await Shop.findById(payment.shop).session(session);
+      ownerModel = 'Shop';
+      commissionRate = 8; // 8% for products (company account)
+      commissionAmount = payment.amount * (commissionRate / 100);
+      payoutAmount = payment.amount - commissionAmount;
+    }
+    
+    if (!owner) {
+      logger.warn(`No owner found for auto-payout: ${payment._id}`);
+      return;
+    }
+    
+    // ✅ UPDATE OWNER EARNINGS (Immediate)
+    owner.earnings.total = (owner.earnings.total || 0) + payoutAmount;
+    owner.earnings.lastUpdated = new Date();
+    
+    // Update commission tracking
+    owner.commission = owner.commission || {};
+    owner.commission.paid = (owner.commission.paid || 0) + commissionAmount;
+    owner.commission.lastPaymentDate = new Date();
+    
+    await owner.save({ session });
+    
+    // ✅ INITIATE AUTO-PAYOUT (Actual money transfer)
+    const payoutResult = await this.initiatePayoutToOwner(owner, payoutAmount, payment, session);
+    
+    // Update payment with payout details
+    payment.autoPayout = {
+      status: payoutResult.success ? 'completed' : 'failed',
+      payoutDate: new Date(),
+      payoutMethod: payoutResult.method,
+      payoutTo: payoutResult.to,
+      ...(payoutResult.transactionId && { payoutId: payoutResult.transactionId })
+    };
+    
+    payment.payoutDetails = {
+      ...(isServicePayment && { providerAmount: payoutAmount }),
+      ...(isProductPayment && { shopAmount: payoutAmount }),
+      companyCommission: commissionAmount,
+      sentAt: new Date(),
+      transactionId: payoutResult.transactionId
+    };
+    
+    payment.commission = {
+      companyCommission: commissionAmount,
+      commissionRate: commissionRate,
+      ...(isServicePayment && { providerEarning: payoutAmount }),
+      ...(isProductPayment && { shopEarning: payoutAmount }),
+      calculatedAt: new Date()
+    };
+    
+    await payment.save({ session });
+    
+    // Send notification to owner
+    if (payoutResult.success) {
+      const notificationMessage = `₹${payoutAmount} has been credited to your account for ${isServicePayment ? 'service' : 'order'}. Commission: ₹${commissionAmount}`;
+      
+      await PushNotificationService.sendToUser(
+        owner._id,
+        'Payment Received 💰',
+        notificationMessage
+      );
+    }
+    
+    logger.info(`Auto-payout processed: ${payment._id}, Amount: ${payoutAmount}, Commission: ${commissionAmount}`);
+    
+  } catch (error) {
+    logger.error(`Auto-payout error: ${error.message}`);
+    throw error;
+  }
+};
 
+// ==================== INITIATE PAYOUT TO OWNER ====================
+exports.initiatePayoutToOwner = async (owner, amount, payment, session) => {
+  try {
+    // Get owner's payout method (UPI or bank)
+    const payoutMethod = owner.bankDetails?.upiId ? 'upi' : 
+                        owner.bankDetails?.accountNumber ? 'bank_transfer' : 'wallet';
+    
+    const payoutTo = owner.bankDetails?.upiId || 
+                    owner.bankDetails?.accountNumber || 
+                    owner.walletId;
+    
+    if (!payoutTo) {
+      logger.warn(`No payout method found for owner: ${owner._id}`);
+      return {
+        success: false,
+        error: 'No payout method configured'
+      };
+    }
+    
+    // In production, integrate with Razorpay Payouts/UPI API
+    // This is a simulation - replace with actual API call
+    
+    const transactionId = `PAYOUT-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    
+    // Simulate successful payout
+    // TODO: Replace with actual payout API like Razorpay Payouts
+    /*
+    const razorpay = new Razorpay({
+      key_id: process.env.RAZORPAY_KEY_ID,
+      key_secret: process.env.RAZORPAY_KEY_SECRET
+    });
+    
+    const payout = await razorpay.payouts.create({
+      account_number: process.env.RAZORPAY_ACCOUNT_NUMBER,
+      fund_account_id: owner.razorpayFundAccountId,
+      amount: amount * 100, // in paise
+      currency: "INR",
+      mode: payoutMethod,
+      purpose: "payout",
+      queue_if_low_balance: true,
+      reference_id: transactionId,
+      narration: `Payout for payment ${payment.transactionId}`
+    });
+    */
+    
+    // For now, simulate success
+    await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate API delay
+    
+    logger.info(`Payout initiated: ${transactionId}, Amount: ${amount}, To: ${payoutTo}`);
+    
+    return {
+      success: true,
+      method: payoutMethod,
+      to: payoutTo,
+      transactionId: transactionId,
+      amount: amount
+    };
+    
+  } catch (error) {
+    logger.error(`Initiate payout error: ${error.message}`);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+};
 module.exports = exports;
