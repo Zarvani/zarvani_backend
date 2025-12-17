@@ -137,7 +137,8 @@ router.put(
   authorize('delivery_boy'),
   orderController.markDelivered
 );
-
+router.put('/:id/mark-paid', authorize('shop','delivery_boy'), orderController.markOrderPaid);
+router.get('/commissions/summary', authorize('shop'), orderController.getShopCommissionSummary);
 // Update delivery boy online/offline status
 router.put('/delivery-boy/status',protect,authorize('delivery_boy'),orderController.updateDeliveryBoyStatus);
 
