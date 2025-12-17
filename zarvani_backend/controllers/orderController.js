@@ -778,7 +778,155 @@ exports.markDelivered = async (req, res) => {
     session.endSession();
   }
 };
+// ==================== MARK ORDER AS PAID (PERSONAL PAYMENT) ====================
+// ✅ Mark order as paid (for personal payments)
+exports.markOrderPaid = async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const { paymentMethod = 'cash', transactionId } = req.body;
+        const shopId = req.user._id;
+        
+        const order = await Order.findOne({
+            _id: orderId,
+            shop: shopId,
+            status: { $in: ['delivered', 'arriving'] }
+        });
+        
+        if (!order) {
+            return ResponseHandler.error(res, 'Order not found or not authorized', 404);
+        }
+        
+        const personalPaymentMethods = ['cash', 'personal_upi', 'cod'];
+        const isPersonalPayment = personalPaymentMethods.includes(paymentMethod);
+        
+        // Update order payment info
+        order.payment.method = paymentMethod;
+        order.payment.status = 'paid';
+        order.payment.paidAt = new Date();
+        order.payment.receivedBy = isPersonalPayment ? 'shop' : 'company';
+        
+        if (transactionId) {
+            order.payment.transactionId = transactionId;
+        }
+        
+        // Create payment record
+        const payment = await Payment.create({
+            transactionId: transactionId || `PAY-${Date.now()}`,
+            order: order._id,
+            user: order.user,
+            shop: shopId,
+            amount: order.pricing.totalAmount,
+            paymentMethod: paymentMethod,
+            paymentDestination: isPersonalPayment ? 'personal_account' : 'company_account',
+            paymentType: 'product_order',
+            status: 'success',
+            paymentDate: new Date()
+        });
+        
+        // Process commission based on payment destination
+        if (isPersonalPayment) {
+            await CommissionService.trackPersonalPayment(payment);
+            
+            order.payment.commissionStatus = 'pending';
+            order.payment.commissionAmount = payment.commission.pendingCommission;
+            order.payment.commissionDueDate = payment.pendingCommission.dueDate;
+        } else {
+            await CommissionService.processAutoPayout(payment);
+            order.payment.commissionStatus = 'not_applicable';
+        }
+        
+        await order.save();
+        
+        // Send notification to user
+        await PushNotificationService.sendToUser(
+            order.user,
+            'Payment Received ✅',
+            `Payment of ₹${order.pricing.totalAmount} has been received for your order #${order.orderId}.`
+        );
+        
+        ResponseHandler.success(res, { 
+            order,
+            commission: isPersonalPayment ? {
+                amount: payment.commission.pendingCommission,
+                dueDate: payment.pendingCommission.dueDate,
+                status: 'pending'
+            } : null
+        }, 'Payment recorded successfully');
+        
+    } catch (error) {
+        logger.error(`Mark order paid error: ${error.message}`);
+        ResponseHandler.error(res, error.message, 500);
+    }
+};
 
+// ==================== GET SHOP COMMISSION SUMMARY ====================
+exports.getShopCommissionSummary = async (req, res) => {
+  try {
+    const shopId = req.user._id;
+    
+    // Get all personal payments from shop
+    const personalPayments = await Order.find({
+      shop: shopId,
+      'payment.status': 'paid',
+      'payment.receivedBy': 'shop'
+    });
+    
+    // Calculate totals
+    let totalEarnings = 0;
+    let totalCommissionDue = 0;
+    let totalCommissionPaid = 0;
+    const pendingCommissions = [];
+    
+    personalPayments.forEach(order => {
+      totalEarnings += order.pricing.totalAmount;
+      
+      if (order.payment.commissionStatus === 'pending') {
+        totalCommissionDue += order.payment.commissionAmount || 0;
+        pendingCommissions.push({
+          orderId: order.orderId,
+          amount: order.pricing.totalAmount,
+          commission: order.payment.commissionAmount,
+          dueDate: order.payment.commissionDueDate,
+          customer: order.customerInfo?.name || 'Customer',
+          date: order.payment.paidAt
+        });
+      } else if (order.payment.commissionStatus === 'paid') {
+        totalCommissionPaid += order.payment.commissionAmount || 0;
+      }
+    });
+    
+    // Get paid commissions from Payment model
+    const paidCommissions = await Payment.find({
+      shop: shopId,
+      paymentDestination: 'personal_account',
+      'pendingCommission.status': 'paid'
+    }).sort({ 'pendingCommission.paidDate': -1 }).limit(10);
+    
+    const commissionHistory = paidCommissions.map(p => ({
+      date: p.pendingCommission.paidDate,
+      amount: p.commission.pendingCommission,
+      paymentMethod: p.pendingCommission.paymentMethod,
+      transactionId: p.pendingCommission.transactionId
+    }));
+    
+    ResponseHandler.success(res, {
+      summary: {
+        totalEarnings,
+        totalCommissionDue,
+        totalCommissionPaid,
+        netEarnings: totalEarnings - totalCommissionDue - totalCommissionPaid,
+        pendingCount: pendingCommissions.length
+      },
+      pendingCommissions,
+      commissionHistory,
+      commissionRate: '12%'
+    }, 'Commission summary fetched');
+    
+  } catch (error) {
+    console.error(`Get shop commission error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
 // ==================== CANCELLATION FLOW ====================
 
 // User Cancels Order

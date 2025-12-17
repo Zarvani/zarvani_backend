@@ -476,7 +476,116 @@ exports.updateProviderLocation = async (req, res) => {
     ResponseHandler.error(res, error.message, 500);
   }
 };
+// ==================== MARK BOOKING AS PAID (PERSONAL PAYMENT) ====================
+exports.markBookingPaid = async (req, res) => {
+    try {
+        const { bookingId } = req.params;
+        const { paymentMethod = 'cash', transactionId } = req.body;
+        const providerId = req.user._id;
+        
+        const booking = await Booking.findOne({
+            _id: bookingId,
+            provider: providerId,
+            status: { $in: ['completed', 'in-progress'] }
+        });
+        
+        if (!booking) {
+            return ResponseHandler.error(res, 'Booking not found or not authorized', 404);
+        }
+        
+        // Determine if payment is personal or to company
+        const personalPaymentMethods = ['cash', 'personal_upi', 'cod'];
+        const isPersonalPayment = personalPaymentMethods.includes(paymentMethod);
+        
+        // Update booking payment info
+        booking.payment.method = paymentMethod;
+        booking.payment.status = 'paid';
+        booking.payment.paidAt = new Date();
+        booking.payment.receivedBy = isPersonalPayment ? 'provider' : 'company';
+        
+        if (transactionId) {
+            booking.payment.transactionId = transactionId;
+        }
+        
+        // Create payment record
+        const payment = await Payment.create({
+            transactionId: transactionId || `PAY-${Date.now()}`,
+            booking: booking._id,
+            user: booking.user,
+            provider: providerId,
+            amount: booking.totalAmount,
+            paymentMethod: paymentMethod,
+            paymentDestination: isPersonalPayment ? 'personal_account' : 'company_account',
+            paymentType: 'service',
+            status: 'success',
+            paymentDate: new Date()
+        });
+        
+        // Process commission based on payment destination
+        if (isPersonalPayment) {
+            // Personal payment - track commission
+            await CommissionService.trackPersonalPayment(payment);
+            
+            booking.payment.commissionStatus = 'pending';
+            booking.payment.commissionAmount = payment.commission.pendingCommission;
+            booking.payment.commissionDueDate = payment.pendingCommission.dueDate;
+        } else {
+            // Company payment - auto payout
+            await CommissionService.processAutoPayout(payment);
+            booking.payment.commissionStatus = 'not_applicable';
+        }
+        
+        await booking.save();
+        
+        // Send notification to user
+        await PushNotificationService.sendToUser(
+            booking.user,
+            'Payment Received ✅',
+            `Payment of ₹${booking.totalAmount} has been received for your ${booking.serviceDetails?.title || 'booking'}.`
+        );
+        
+        ResponseHandler.success(res, { 
+            booking,
+            commission: isPersonalPayment ? {
+                amount: payment.commission.pendingCommission,
+                dueDate: payment.pendingCommission.dueDate,
+                status: 'pending'
+            } : null
+        }, 'Payment recorded successfully');
+        
+    } catch (error) {
+        logger.error(`Mark booking paid error: ${error.message}`);
+        ResponseHandler.error(res, error.message, 500);
+    }
+};
 
+// ✅ Get provider commission summary
+exports.getProviderCommissionSummary = async (req, res) => {
+    try {
+        const providerId = req.user._id;
+        
+        const summary = await CommissionService.getCommissionSummary(providerId, 'provider');
+        
+        // Get provider model for total earnings
+        const provider = await ServiceProvider.findById(providerId);
+        
+        ResponseHandler.success(res, {
+            summary,
+            earnings: {
+                total: provider.earnings.total,
+                commission: {
+                    due: provider.commission.due,
+                    paid: provider.commission.paid
+                }
+            },
+            commissionRate: '20% (personal payments)'
+        }, 'Commission summary fetched');
+        
+    } catch (error) {
+        logger.error(`Get provider commission error: ${error.message}`);
+        ResponseHandler.error(res, error.message, 500);
+    }
+};
 // ========================== UPDATE BOOKING STATUS ==========================
 exports.updateBookingStatus = async (req, res) => {
   try {
