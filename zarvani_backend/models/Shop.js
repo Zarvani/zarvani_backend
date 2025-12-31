@@ -77,13 +77,6 @@ const deliveryBoySchema = new mongoose.Schema({
     average: { type: Number, default: 0 },
     count: { type: Number, default: 0 }
   },
-  earnings: {
-    today: { type: Number, default: 0 },
-    weekly: { type: Number, default: 0 },
-    monthly: { type: Number, default: 0 },
-    total: { type: Number, default: 0 },
-    pending: { type: Number, default: 0 }
-  },
   isActive: {
     type: Boolean,
     default: true

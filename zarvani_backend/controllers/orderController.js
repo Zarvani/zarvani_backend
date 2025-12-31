@@ -18,21 +18,21 @@ const generateOrderId = () => {
 // Helper: Calculate delivery fee
 const calculateDeliveryFee = (shop, distance, orderAmount) => {
   const settings = shop.deliverySettings;
-  
+
   // Check for free delivery
   if (orderAmount >= settings.deliveryFee.freeDeliveryAbove) {
     return 0;
   }
-  
+
   // Base fee + per km charge
   let fee = settings.deliveryFee.baseFee;
   if (distance > 1) { // First km free or included in base
     fee += Math.ceil(distance - 1) * settings.deliveryFee.perKm;
   }
-  
+
   // Cap at maximum if needed
-  const maxFee = settings.deliveryFee.baseFee + 
-                (settings.radius * settings.deliveryFee.perKm);
+  const maxFee = settings.deliveryFee.baseFee +
+    (settings.radius * settings.deliveryFee.perKm);
   return Math.min(fee, maxFee);
 };
 
@@ -44,19 +44,19 @@ exports.createOrder = async (req, res) => {
   try {
     session.startTransaction();
 
-    const { 
-      shopId, 
-      items, 
-      deliveryAddressId, 
+    const {
+      shopId,
+      items,
+      deliveryAddressId,
       deliveryType = 'standard',
       deliverySlot,
       deliveryInstructions,
       paymentMethod,
       couponCode,
       tip = 0,
-      notes 
+      notes
     } = req.body;
-    
+
     const userId = req.user._id;
 
     // Fetch user
@@ -65,7 +65,7 @@ exports.createOrder = async (req, res) => {
 
     const deliveryAddress = user.addresses.id(deliveryAddressId);
     if (!deliveryAddress) throw new Error('Delivery address not found');
-   
+
     // Fetch shop
     const shop = await Shop.findById(shopId).session(session);
     if (!shop || !shop.isActive || !shop.isOpen) throw new Error('Shop is not available');
@@ -230,7 +230,7 @@ exports.createOrder = async (req, res) => {
     );
 
   } catch (error) {
-    try { await session.abortTransaction(); } catch {}
+    try { await session.abortTransaction(); } catch { }
     session.endSession();
 
     logger.error(`Create order error: ${error.message}`);
@@ -352,23 +352,23 @@ exports.acceptOrder = async (req, res) => {
 exports.rejectOrder = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
-  
+
   try {
     const { orderId } = req.params;
     const { reason } = req.body;
     const shopId = req.user._id;
-    
+
     const order = await Order.findOne({
       _id: orderId,
       shop: shopId,
       status: 'pending'
     }).session(session);
-    
+
     if (!order) {
       await session.abortTransaction();
       return ResponseHandler.error(res, 'Order not found or already processed', 404);
     }
-    
+
     // Restore product stock
     for (const item of order.items) {
       await Product.findByIdAndUpdate(
@@ -377,28 +377,28 @@ exports.rejectOrder = async (req, res) => {
         { session }
       );
     }
-    
+
     // Update order
     order.status = 'rejected';
     order.rejection = { reason };
     order.timestamps.rejectedAt = new Date();
     order._updatedBy = 'shop';
-    
+
     // Update shop stats
     await Shop.findByIdAndUpdate(
       shopId,
-      { 
-        $inc: { 
+      {
+        $inc: {
           'orderStats.pending': -1,
           'orderStats.cancelled': 1
         }
       },
       { session }
     );
-    
+
     await order.save({ session });
     await session.commitTransaction();
-    
+
     // Refund payment if online
     if (order.payment.method !== 'cod' && order.payment.status === 'paid') {
       // Implement refund logic here
@@ -406,16 +406,16 @@ exports.rejectOrder = async (req, res) => {
       order.payment.refundedAt = new Date();
       await order.save();
     }
-    
+
     // Send notification
     await PushNotificationService.sendToUser(
       order.user,
       'Order Rejected',
       `Shop rejected your order #${order.orderId}. Reason: ${reason}`
     );
-    
+
     ResponseHandler.success(res, { order }, 'Order rejected');
-    
+
   } catch (error) {
     await session.abortTransaction();
     logger.error(`Reject order error: ${error.message}`);
@@ -545,21 +545,21 @@ exports.pickupOrder = async (req, res) => {
     const { orderId } = req.params;
     const { latitude, longitude, address } = req.body;
     const deliveryBoyId = req.user._id;
-    
+
     const order = await Order.findOne({
       _id: orderId,
       deliveryBoy: deliveryBoyId,
       status: 'ready'
     });
-    
+
     if (!order) {
       return ResponseHandler.error(res, 'Order not found or not ready for pickup', 404);
     }
-    
+
     // Update delivery boy location
     const shop = await Shop.findById(order.shop);
     const deliveryBoy = shop.deliveryBoys.id(deliveryBoyId);
-    
+
     if (deliveryBoy) {
       deliveryBoy.currentLocation = {
         type: 'Point',
@@ -569,16 +569,16 @@ exports.pickupOrder = async (req, res) => {
       };
       await shop.save();
     }
-    
+
     // Update order
     order.status = 'out_for_delivery';
     order.timestamps.pickedUpAt = new Date();
     order.timestamps.outForDeliveryAt = new Date();
     order._updatedBy = 'delivery_boy';
-    
+
     await order.updateDeliveryBoyLocation(latitude, longitude, address);
     await order.save();
-    
+
     // Update shop stats
     await Shop.findByIdAndUpdate(order.shop, {
       $inc: {
@@ -586,16 +586,16 @@ exports.pickupOrder = async (req, res) => {
         'orderStats.outForDelivery': 1
       }
     });
-    
+
     // Send notifications
     await PushNotificationService.sendToUser(
       order.user,
       'Out for Delivery',
-      `Your order is on the way! Estimated delivery: ${order.tracking.estimatedDeliveryTime ? new Date(order.tracking.estimatedDeliveryTime).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'Soon'}`
+      `Your order is on the way! Estimated delivery: ${order.tracking.estimatedDeliveryTime ? new Date(order.tracking.estimatedDeliveryTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Soon'}`
     );
-    
+
     ResponseHandler.success(res, { order }, 'Order picked up successfully');
-    
+
   } catch (error) {
     logger.error(`Pickup order error: ${error.message}`);
     ResponseHandler.error(res, error.message, 500);
@@ -608,21 +608,21 @@ exports.updateDeliveryLocation = async (req, res) => {
     const { orderId } = req.params;
     const { latitude, longitude, address } = req.body;
     const deliveryBoyId = req.user._id;
-    
+
     const order = await Order.findOne({
       _id: orderId,
       deliveryBoy: deliveryBoyId,
       status: 'out_for_delivery'
     });
-    
+
     if (!order) {
       return ResponseHandler.error(res, 'Order not found', 404);
     }
-    
+
     // Update shop's delivery boy location
     const shop = await Shop.findById(order.shop);
     const deliveryBoy = shop.deliveryBoys.id(deliveryBoyId);
-    
+
     if (deliveryBoy) {
       deliveryBoy.currentLocation = {
         type: 'Point',
@@ -632,10 +632,10 @@ exports.updateDeliveryLocation = async (req, res) => {
       };
       await shop.save();
     }
-    
+
     // Update order tracking
     await order.updateDeliveryBoyLocation(latitude, longitude, address);
-    
+
     // Check if delivery boy is close to destination (within 500m)
     const distanceToUser = order.tracking.distance.boyToUser;
     if (distanceToUser < 0.5 && order.status !== 'arriving') {
@@ -643,20 +643,20 @@ exports.updateDeliveryLocation = async (req, res) => {
       order.timestamps.arrivingAt = new Date();
       order._updatedBy = 'system';
       await order.save();
-      
+
       await PushNotificationService.sendToUser(
         order.user,
         'Delivery Partner Arriving',
         'Your delivery partner is arriving in 2-3 minutes!'
       );
     }
-    
+
     ResponseHandler.success(res, {
       distance: distanceToUser,
       eta: order.tracking.estimatedDeliveryTime,
       status: order.status
     }, 'Location updated');
-    
+
   } catch (error) {
     logger.error(`Update delivery location error: ${error.message}`);
     ResponseHandler.error(res, error.message, 500);
@@ -667,45 +667,45 @@ exports.updateDeliveryLocation = async (req, res) => {
 exports.markDelivered = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
-  
+
   try {
     const { orderId } = req.params;
     const { otp } = req.body;
     const deliveryBoyId = req.user._id;
-    
+
     const order = await Order.findOne({
       _id: orderId,
       deliveryBoy: deliveryBoyId,
       status: { $in: ['out_for_delivery', 'arriving'] }
     }).session(session);
-    
+
     if (!order) {
       await session.abortTransaction();
       return ResponseHandler.error(res, 'Order not found', 404);
     }
-    
+
     // Verify OTP (optional)
     if (order.deliveryInfo.otp && otp !== order.deliveryInfo.otp.code) {
       await session.abortTransaction();
       return ResponseHandler.error(res, 'Invalid OTP', 400);
     }
-    
+
     if (order.deliveryInfo.otp) {
       order.deliveryInfo.otp.verified = true;
     }
-    
+
     // Update order
     order.status = 'delivered';
     order.timestamps.deliveredAt = new Date();
     order._updatedBy = 'delivery_boy';
     order.payment.status = order.payment.method === 'cod' ? 'paid' : order.payment.status;
     order.payment.paidAt = new Date();
-    
+
     // Update shop stats
     await Shop.findByIdAndUpdate(
       order.shop,
-      { 
-        $inc: { 
+      {
+        $inc: {
           'orderStats.outForDelivery': -1,
           'orderStats.delivered': 1,
           'earnings.pending': order.payment.method === 'cod' ? -order.pricing.totalAmount : 0
@@ -713,32 +713,32 @@ exports.markDelivered = async (req, res) => {
       },
       { session }
     );
-    
+
     // Update delivery boy stats
     const shop = await Shop.findById(order.shop).session(session);
     const deliveryBoy = shop.deliveryBoys.id(deliveryBoyId);
-    
+
     if (deliveryBoy) {
       // Remove order from assigned orders
       deliveryBoy.assignedOrders = deliveryBoy.assignedOrders.filter(
         order => order.toString() !== orderId
       );
-      
+
       // Update stats
       deliveryBoy.totalDeliveries += 1;
       deliveryBoy.earnings.today += order.pricing.deliveryFee;
       deliveryBoy.earnings.weekly += order.pricing.deliveryFee;
       deliveryBoy.earnings.monthly += order.pricing.deliveryFee;
       deliveryBoy.earnings.total += order.pricing.deliveryFee;
-      
+
       // Update status if no more assigned orders
       if (deliveryBoy.assignedOrders.length === 0) {
         deliveryBoy.status = 'active';
       }
-      
+
       await shop.save({ session });
     }
-    
+
     // Update user stats
     await User.findByIdAndUpdate(
       order.user,
@@ -751,25 +751,25 @@ exports.markDelivered = async (req, res) => {
       },
       { session }
     );
-    
+
     await order.save({ session });
     await session.commitTransaction();
-    
+
     // Send notifications
     await PushNotificationService.sendToUser(
       order.user,
       'Order Delivered',
       `Your order #${order.orderId} has been delivered successfully!`
     );
-    
+
     await PushNotificationService.sendToShop(
       order.shop,
       'Order Delivered',
       `Order #${order.orderId} delivered successfully`
     );
-    
+
     ResponseHandler.success(res, { order }, 'Order delivered successfully');
-    
+
   } catch (error) {
     await session.abortTransaction();
     logger.error(`Mark delivered error: ${error.message}`);
@@ -781,105 +781,116 @@ exports.markDelivered = async (req, res) => {
 // ==================== MARK ORDER AS PAID (PERSONAL PAYMENT) ====================
 // ✅ Mark order as paid (for personal payments)
 exports.markOrderPaid = async (req, res) => {
-    try {
-        const { orderId } = req.params;
-        const { paymentMethod = 'cash', transactionId } = req.body;
-        const shopId = req.user._id;
-        
-        const order = await Order.findOne({
-            _id: orderId,
-            shop: shopId,
-            status: { $in: ['delivered', 'arriving'] }
-        });
-        
-        if (!order) {
-            return ResponseHandler.error(res, 'Order not found or not authorized', 404);
-        }
-        
-        const personalPaymentMethods = ['cash', 'personal_upi', 'cod'];
-        const isPersonalPayment = personalPaymentMethods.includes(paymentMethod);
-        
-        // Update order payment info
-        order.payment.method = paymentMethod;
-        order.payment.status = 'paid';
-        order.payment.paidAt = new Date();
-        order.payment.receivedBy = isPersonalPayment ? 'shop' : 'company';
-        
-        if (transactionId) {
-            order.payment.transactionId = transactionId;
-        }
-        
-        // Create payment record
-        const payment = await Payment.create({
-            transactionId: transactionId || `PAY-${Date.now()}`,
-            order: order._id,
-            user: order.user,
-            shop: shopId,
-            amount: order.pricing.totalAmount,
-            paymentMethod: paymentMethod,
-            paymentDestination: isPersonalPayment ? 'personal_account' : 'company_account',
-            paymentType: 'product_order',
-            status: 'success',
-            paymentDate: new Date()
-        });
-        
-        // Process commission based on payment destination
-        if (isPersonalPayment) {
-            await CommissionService.trackPersonalPayment(payment);
-            
-            order.payment.commissionStatus = 'pending';
-            order.payment.commissionAmount = payment.commission.pendingCommission;
-            order.payment.commissionDueDate = payment.pendingCommission.dueDate;
-        } else {
-            await CommissionService.processAutoPayout(payment);
-            order.payment.commissionStatus = 'not_applicable';
-        }
-        
-        await order.save();
-        
-        // Send notification to user
-        await PushNotificationService.sendToUser(
-            order.user,
-            'Payment Received ✅',
-            `Payment of ₹${order.pricing.totalAmount} has been received for your order #${order.orderId}.`
-        );
-        
-        ResponseHandler.success(res, { 
-            order,
-            commission: isPersonalPayment ? {
-                amount: payment.commission.pendingCommission,
-                dueDate: payment.pendingCommission.dueDate,
-                status: 'pending'
-            } : null
-        }, 'Payment recorded successfully');
-        
-    } catch (error) {
-        logger.error(`Mark order paid error: ${error.message}`);
-        ResponseHandler.error(res, error.message, 500);
+  try {
+    const { orderId } = req.params;
+    const { paymentMethod = 'cash', transactionId } = req.body;
+    const shopId = req.user._id;
+
+    const order = await Order.findOne({
+      _id: orderId,
+      shop: shopId,
+      status: { $in: ['delivered', 'arriving'] }
+    });
+
+    if (!order) {
+      return ResponseHandler.error(res, 'Order not found or not authorized', 404);
     }
+    if (order.payment?.status === 'paid') {
+      order.status = 'delivered'; // or whatever marks completion
+      order.completedAt = new Date();
+
+      await order.save();
+
+      return ResponseHandler.success(res, {
+        order,
+        commission: null
+      }, 'Service completed successfully');
+    }
+
+    const personalPaymentMethods = ['cash', 'personal_upi', 'cod'];
+    const isPersonalPayment = personalPaymentMethods.includes(paymentMethod);
+
+    // Update order payment info
+    order.payment.method = paymentMethod;
+    order.payment.status = 'paid';
+    order.payment.paidAt = new Date();
+    order.payment.receivedBy = isPersonalPayment ? 'shop' : 'company';
+
+    if (transactionId) {
+      order.payment.transactionId = transactionId;
+    }
+
+    // Create payment record
+    const payment = await Payment.create({
+      transactionId: transactionId || `PAY-${Date.now()}`,
+      order: order._id,
+      user: order.user,
+      shop: shopId,
+      amount: order.pricing.totalAmount,
+      paymentMethod: paymentMethod,
+      paymentDestination: isPersonalPayment ? 'personal_account' : 'company_account',
+      paymentType: 'product_order',
+      status: 'success',
+      paymentDate: new Date()
+    });
+
+    // Process commission based on payment destination
+    if (isPersonalPayment) {
+      await CommissionService.trackPersonalPayment(payment);
+
+      order.payment.commissionStatus = 'pending';
+      order.payment.commissionAmount = payment.commission.pendingCommission;
+      order.payment.commissionDueDate = payment.pendingCommission.dueDate;
+    } else {
+      await CommissionService.processAutoPayout(payment);
+      order.payment.commissionStatus = 'not_applicable';
+    }
+
+    await order.save();
+
+    // Send notification to user
+    await PushNotificationService.sendToUser(
+      order.user,
+      'Payment Received ✅',
+      `Payment of ₹${order.pricing.totalAmount} has been received for your order #${order.orderId}.`
+    );
+
+    ResponseHandler.success(res, {
+      order,
+      commission: isPersonalPayment ? {
+        amount: payment.commission.pendingCommission,
+        dueDate: payment.pendingCommission.dueDate,
+        status: 'pending'
+      } : null
+    }, 'Payment recorded successfully');
+
+  } catch (error) {
+    logger.error(`Mark order paid error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
 };
 
 // ==================== GET SHOP COMMISSION SUMMARY ====================
 exports.getShopCommissionSummary = async (req, res) => {
   try {
     const shopId = req.user._id;
-    
+
     // Get all personal payments from shop
     const personalPayments = await Order.find({
       shop: shopId,
       'payment.status': 'paid',
       'payment.receivedBy': 'shop'
     });
-    
+
     // Calculate totals
     let totalEarnings = 0;
     let totalCommissionDue = 0;
     let totalCommissionPaid = 0;
     const pendingCommissions = [];
-    
+
     personalPayments.forEach(order => {
       totalEarnings += order.pricing.totalAmount;
-      
+
       if (order.payment.commissionStatus === 'pending') {
         totalCommissionDue += order.payment.commissionAmount || 0;
         pendingCommissions.push({
@@ -894,21 +905,21 @@ exports.getShopCommissionSummary = async (req, res) => {
         totalCommissionPaid += order.payment.commissionAmount || 0;
       }
     });
-    
+
     // Get paid commissions from Payment model
     const paidCommissions = await Payment.find({
       shop: shopId,
       paymentDestination: 'personal_account',
       'pendingCommission.status': 'paid'
     }).sort({ 'pendingCommission.paidDate': -1 }).limit(10);
-    
+
     const commissionHistory = paidCommissions.map(p => ({
       date: p.pendingCommission.paidDate,
       amount: p.commission.pendingCommission,
       paymentMethod: p.pendingCommission.paymentMethod,
       transactionId: p.pendingCommission.transactionId
     }));
-    
+
     ResponseHandler.success(res, {
       summary: {
         totalEarnings,
@@ -921,7 +932,7 @@ exports.getShopCommissionSummary = async (req, res) => {
       commissionHistory,
       commissionRate: '12%'
     }, 'Commission summary fetched');
-    
+
   } catch (error) {
     console.error(`Get shop commission error: ${error.message}`);
     ResponseHandler.error(res, error.message, 500);
@@ -933,33 +944,33 @@ exports.getShopCommissionSummary = async (req, res) => {
 exports.cancelOrder = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
-  
+
   try {
     const { orderId } = req.params;
     const { reason } = req.body;
     const userId = req.user._id;
-    
+
     const order = await Order.findOne({
       _id: orderId,
       user: userId
     }).session(session);
-    
+
     if (!order) {
       await session.abortTransaction();
       return ResponseHandler.error(res, 'Order not found', 404);
     }
-    
+
     // Check if order can be cancelled
     const cancellableStatuses = ['pending', 'confirmed', 'preparing'];
     if (!cancellableStatuses.includes(order.status)) {
       await session.abortTransaction();
       return ResponseHandler.error(
-        res, 
-        `Order cannot be cancelled in ${order.status} status`, 
+        res,
+        `Order cannot be cancelled in ${order.status} status`,
         400
       );
     }
-    
+
     // Restore product stock
     for (const item of order.items) {
       await Product.findByIdAndUpdate(
@@ -968,7 +979,7 @@ exports.cancelOrder = async (req, res) => {
         { session }
       );
     }
-    
+
     // Update order
     order.status = 'cancelled';
     order.cancellation = {
@@ -979,12 +990,12 @@ exports.cancelOrder = async (req, res) => {
     };
     order.timestamps.cancelledAt = new Date();
     order._updatedBy = 'user';
-    
+
     // Update shop stats
     await Shop.findByIdAndUpdate(
       order.shop,
-      { 
-        $inc: { 
+      {
+        $inc: {
           [`orderStats.${order.status}`]: -1,
           'orderStats.cancelled': 1,
           'earnings.pending': order.payment.method === 'cod' ? -order.pricing.totalAmount : 0,
@@ -996,7 +1007,7 @@ exports.cancelOrder = async (req, res) => {
       },
       { session }
     );
-    
+
     // Process refund if online payment
     if (order.payment.method !== 'cod' && order.payment.status === 'paid') {
       order.payment.status = 'refunded';
@@ -1004,34 +1015,34 @@ exports.cancelOrder = async (req, res) => {
       order.cancellation.refundStatus = 'processed';
       // Add actual refund logic here
     }
-    
+
     await order.save({ session });
     await session.commitTransaction();
-    
+
     // Send notifications
     await PushNotificationService.sendToShop(
       order.shop,
       'Order Cancelled',
       `Order #${order.orderId} has been cancelled by customer. Reason: ${reason}`
     );
-    
+
     // Notify delivery boy if assigned
     if (order.deliveryBoy) {
       const shop = await Shop.findById(order.shop);
       const deliveryBoy = shop.deliveryBoys.id(order.deliveryBoy);
-      
+
       if (deliveryBoy) {
         // Remove from assigned orders
         deliveryBoy.assignedOrders = deliveryBoy.assignedOrders.filter(
           o => o.toString() !== orderId
         );
-        
+
         if (deliveryBoy.assignedOrders.length === 0) {
           deliveryBoy.status = 'active';
         }
-        
+
         await shop.save();
-        
+
         await PushNotificationService.sendToDeliveryBoy(
           order.deliveryBoy,
           order.shop,
@@ -1040,9 +1051,9 @@ exports.cancelOrder = async (req, res) => {
         );
       }
     }
-    
+
     ResponseHandler.success(res, { order }, 'Order cancelled successfully');
-    
+
   } catch (error) {
     await session.abortTransaction();
     logger.error(`Cancel order error: ${error.message}`);
@@ -1056,23 +1067,23 @@ exports.cancelOrder = async (req, res) => {
 exports.shopCancelOrder = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
-  
+
   try {
     const { orderId } = req.params;
     const { reason } = req.body;
     const shopId = req.user._id;
-    
+
     const order = await Order.findOne({
       _id: orderId,
       shop: shopId,
       status: { $in: ['confirmed', 'preparing', 'ready'] }
     }).session(session);
-    
+
     if (!order) {
       await session.abortTransaction();
       return ResponseHandler.error(res, 'Order not found or cannot be cancelled', 404);
     }
-    
+
     // Restore product stock
     for (const item of order.items) {
       await Product.findByIdAndUpdate(
@@ -1081,7 +1092,7 @@ exports.shopCancelOrder = async (req, res) => {
         { session }
       );
     }
-    
+
     // Update order
     order.status = 'cancelled';
     order.cancellation = {
@@ -1092,12 +1103,12 @@ exports.shopCancelOrder = async (req, res) => {
     };
     order.timestamps.cancelledAt = new Date();
     order._updatedBy = 'shop';
-    
+
     // Update shop stats
     await Shop.findByIdAndUpdate(
       shopId,
-      { 
-        $inc: { 
+      {
+        $inc: {
           [`orderStats.${order.status}`]: -1,
           'orderStats.cancelled': 1,
           'earnings.pending': order.payment.method === 'cod' ? -order.pricing.totalAmount : 0,
@@ -1109,44 +1120,44 @@ exports.shopCancelOrder = async (req, res) => {
       },
       { session }
     );
-    
+
     // Process refund
     if (order.payment.method !== 'cod' && order.payment.status === 'paid') {
       order.payment.status = 'refunded';
       order.payment.refundedAt = new Date();
       order.cancellation.refundStatus = 'processed';
     }
-    
+
     await order.save({ session });
     await session.commitTransaction();
-    
+
     // Send notifications
     await PushNotificationService.sendToUser(
       order.user,
       'Order Cancelled',
       `Shop cancelled your order #${order.orderId}. Reason: ${reason}. Amount will be refunded if paid online.`
     );
-    
+
     // Notify delivery boy if assigned
     if (order.deliveryBoy) {
       const shop = await Shop.findById(shopId);
       const deliveryBoy = shop.deliveryBoys.id(order.deliveryBoy);
-      
+
       if (deliveryBoy) {
         deliveryBoy.assignedOrders = deliveryBoy.assignedOrders.filter(
           o => o.toString() !== orderId
         );
-        
+
         if (deliveryBoy.assignedOrders.length === 0) {
           deliveryBoy.status = 'active';
         }
-        
+
         await shop.save();
       }
     }
-    
+
     ResponseHandler.success(res, { order }, 'Order cancelled successfully');
-    
+
   } catch (error) {
     await session.abortTransaction();
     logger.error(`Shop cancel order error: ${error.message}`);
@@ -1162,16 +1173,16 @@ exports.shopCancelOrder = async (req, res) => {
 exports.getUserOrders = async (req, res) => {
   try {
     const userId = req.user._id;
-    const { 
-      status, 
-      page = 1, 
+    const {
+      status,
+      page = 1,
       limit = 20,
       sortBy = 'createdAt',
       sortOrder = 'desc'
     } = req.query;
-    
+
     const query = { user: userId };
-    
+
     if (status) {
       if (status === 'active') {
         query.status = { $in: ['pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'arriving'] };
@@ -1181,30 +1192,30 @@ exports.getUserOrders = async (req, res) => {
         query.status = status;
       }
     }
-    
+
     const skip = (page - 1) * limit;
     const sort = { [sortBy]: sortOrder === 'desc' ? -1 : 1 };
-    
+
     const orders = await Order.find(query)
       .populate('shop', 'name logo address rating')
       .populate('deliveryBoy', 'name phone vehicle')
       .sort(sort)
       .skip(skip)
       .limit(parseInt(limit));
-    
+
     const total = await Order.countDocuments(query);
-    
+
     // Get order statistics
     const stats = {
       total: await Order.countDocuments({ user: userId }),
-      active: await Order.countDocuments({ 
-        user: userId, 
-        status: { $in: ['pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'arriving'] } 
+      active: await Order.countDocuments({
+        user: userId,
+        status: { $in: ['pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'arriving'] }
       }),
       delivered: await Order.countDocuments({ user: userId, status: 'delivered' }),
       cancelled: await Order.countDocuments({ user: userId, status: 'cancelled' })
     };
-    
+
     ResponseHandler.success(res, {
       orders,
       pagination: {
@@ -1215,7 +1226,7 @@ exports.getUserOrders = async (req, res) => {
       },
       stats
     }, 'Orders fetched successfully');
-    
+
   } catch (error) {
     logger.error(`Get user orders error: ${error.message}`);
     ResponseHandler.error(res, error.message, 500);
@@ -1228,20 +1239,20 @@ exports.getShopOrders = async (req, res) => {
   try {
     const shopId = req.user._id;
 
-    const { 
-      status, 
-      page = 1, 
+    const {
+      status,
+      page = 1,
       limit = 20,
       dateFrom,
       dateTo,
       search
     } = req.query;
-    
+
     const query = { shop: shopId };
-    
+
     // Status filter - Map UI status to backend status
     if (status && status !== 'all') {
-      switch(status) {
+      switch (status) {
         case 'pending':
           query.status = 'pending';
           break;
@@ -1271,14 +1282,14 @@ exports.getShopOrders = async (req, res) => {
           query.status = status;
       }
     }
-    
+
     // Date range filter
     if (dateFrom || dateTo) {
       query.createdAt = {};
       if (dateFrom) query.createdAt.$gte = new Date(dateFrom);
       if (dateTo) query.createdAt.$lte = new Date(dateTo);
     }
-    
+
     // Search filter
     if (search) {
       query.$or = [
@@ -1287,7 +1298,7 @@ exports.getShopOrders = async (req, res) => {
         { 'customerInfo.phone': { $regex: search, $options: 'i' } }
       ];
     }
-    
+
     const skip = (page - 1) * limit;
 
     // Fetch orders
@@ -1299,7 +1310,7 @@ exports.getShopOrders = async (req, res) => {
       .skip(skip)
       .limit(parseInt(limit))
       .lean();
-    
+
     const total = await Order.countDocuments(query);
 
     // Get shop stats for counts
@@ -1316,7 +1327,7 @@ exports.getShopOrders = async (req, res) => {
     // Convert stats to object
     const statsObj = {};
     let allCount = 0;
-    
+
     stats.forEach(item => {
       statsObj[item._id] = item.count;
       allCount += item.count;
@@ -1380,12 +1391,12 @@ exports.getOrderDetails = async (req, res) => {
     //-----------------------------
     const deliveryAddress = order.deliveryInfo
       ? {
-          house: order.deliveryInfo.house,
-          area: order.deliveryInfo.area,
-          city: order.deliveryInfo.city,
-          pincode: order.deliveryInfo.pincode,
-          coordinates: order.deliveryInfo.coordinates || null,
-        }
+        house: order.deliveryInfo.house,
+        area: order.deliveryInfo.area,
+        city: order.deliveryInfo.city,
+        pincode: order.deliveryInfo.pincode,
+        coordinates: order.deliveryInfo.coordinates || null,
+      }
       : null;
 
     //-----------------------------
@@ -1393,15 +1404,15 @@ exports.getOrderDetails = async (req, res) => {
     //-----------------------------
     const deliveryBoy = assignedBoy
       ? {
-          _id: assignedBoy._id,
-          name: assignedBoy.name,
-          phone: assignedBoy.phone,
-          vehicle: assignedBoy.vehicle,
-          profilePicture: assignedBoy.profilePicture,
+        _id: assignedBoy._id,
+        name: assignedBoy.name,
+        phone: assignedBoy.phone,
+        vehicle: assignedBoy.vehicle,
+        profilePicture: assignedBoy.profilePicture,
 
-          location: order.tracking?.deliveryBoyLocation || null,
-          distance: order.tracking?.distance?.boyToUser || null,
-        }
+        location: order.tracking?.deliveryBoyLocation || null,
+        distance: order.tracking?.distance?.boyToUser || null,
+      }
       : null;
 
     //-----------------------------
@@ -1479,14 +1490,14 @@ exports.getOrderTracking = async (req, res) => {
 
       deliveryBoy: assignedBoy
         ? {
-            _id: assignedBoy._id,
-            name: assignedBoy.name,
-            phone: assignedBoy.phone,
-            vehicle: assignedBoy.vehicle,
-            profilePicture: assignedBoy.profilePicture,
-            location: order.tracking?.deliveryBoyLocation,
-            distance: order.tracking?.distance?.boyToUser
-          }
+          _id: assignedBoy._id,
+          name: assignedBoy.name,
+          phone: assignedBoy.phone,
+          vehicle: assignedBoy.vehicle,
+          profilePicture: assignedBoy.profilePicture,
+          location: order.tracking?.deliveryBoyLocation,
+          distance: order.tracking?.distance?.boyToUser
+        }
         : null,
 
       estimatedDeliveryTime: order.tracking?.estimatedDeliveryTime,
@@ -1514,22 +1525,22 @@ exports.getDeliveryBoyOrders = async (req, res) => {
   try {
     const deliveryBoyId = req.user._id;
     const shopId = req.user.shop; // Assuming delivery boy has shop reference
-    
+
     const shop = await Shop.findById(shopId);
     const deliveryBoy = shop.deliveryBoys.id(deliveryBoyId);
-    
+
     if (!deliveryBoy) {
       return ResponseHandler.error(res, 'Delivery boy not found', 404);
     }
-    
+
     const activeOrders = await Order.find({
       _id: { $in: deliveryBoy.assignedOrders },
       status: { $in: ['ready', 'out_for_delivery', 'arriving'] }
     })
-    .populate('user', 'name phone')
-    .populate('shop', 'name address phone')
-    .sort({ 'timestamps.readyAt': 1 });
-    
+      .populate('user', 'name phone')
+      .populate('shop', 'name address phone')
+      .sort({ 'timestamps.readyAt': 1 });
+
     const completedToday = await Order.countDocuments({
       deliveryBoy: deliveryBoyId,
       status: 'delivered',
@@ -1537,7 +1548,7 @@ exports.getDeliveryBoyOrders = async (req, res) => {
         $gte: new Date(new Date().setHours(0, 0, 0, 0))
       }
     });
-    
+
     ResponseHandler.success(res, {
       activeOrders,
       stats: {
@@ -1547,7 +1558,7 @@ exports.getDeliveryBoyOrders = async (req, res) => {
         earnings: deliveryBoy.earnings
       }
     }, 'Orders fetched successfully');
-    
+
   } catch (error) {
     logger.error(`Get delivery boy orders error: ${error.message}`);
     ResponseHandler.error(res, error.message, 500);
@@ -1560,24 +1571,24 @@ exports.updateDeliveryBoyStatus = async (req, res) => {
     const { status } = req.body;
     const deliveryBoyId = req.user._id;
     const shopId = req.user.shop;
-    
+
     const validStatuses = ['active', 'inactive', 'offline'];
     if (!validStatuses.includes(status)) {
       return ResponseHandler.error(res, 'Invalid status', 400);
     }
-    
+
     const shop = await Shop.findById(shopId);
     const deliveryBoy = shop.deliveryBoys.id(deliveryBoyId);
-    
+
     if (!deliveryBoy) {
       return ResponseHandler.error(res, 'Delivery boy not found', 404);
     }
-    
+
     deliveryBoy.status = status;
     await shop.save();
-    
+
     ResponseHandler.success(res, { status: deliveryBoy.status }, 'Status updated');
-    
+
   } catch (error) {
     logger.error(`Update delivery boy status error: ${error.message}`);
     ResponseHandler.error(res, error.message, 500);
@@ -1590,11 +1601,11 @@ exports.updateDeliveryBoyStatus = async (req, res) => {
 async function checkShopAcceptance(orderId) {
   try {
     const order = await Order.findById(orderId);
-    
+
     if (!order || order.status !== 'pending') {
       return;
     }
-    
+
     // Order still pending after 5 minutes
     // We don't auto-cancel, just send reminder to shop
     await PushNotificationService.sendToShop(
@@ -1606,14 +1617,14 @@ async function checkShopAcceptance(orderId) {
         type: 'reminder'
       }
     );
-    
+
     // Send notification to user
     await PushNotificationService.sendToUser(
       order.user,
       'Order Status',
       'Shop is still processing your order. You can cancel if taking too long.'
     );
-    
+
   } catch (error) {
     logger.error(`Check shop acceptance error: ${error.message}`);
   }
@@ -1623,16 +1634,16 @@ async function checkShopAcceptance(orderId) {
 exports.getAvailableShops = async (req, res) => {
   try {
     const { latitude, longitude, category, search } = req.query;
-    
+
     if (!latitude || !longitude) {
       return ResponseHandler.error(res, 'Location required', 400);
     }
-    
+
     const userLocation = {
       type: 'Point',
       coordinates: [parseFloat(longitude), parseFloat(latitude)]
     };
-    
+
     // Find shops within 10km radius
     const shops = await Shop.find({
       isActive: true,
@@ -1645,9 +1656,9 @@ exports.getAvailableShops = async (req, res) => {
         }
       }
     })
-    .select('name logo address deliverySettings ratings categories workingHours isShopOpenNow')
-    .lean();
-    
+      .select('name logo address deliverySettings ratings categories workingHours isShopOpenNow')
+      .lean();
+
     // Calculate distance and delivery time for each shop
     const shopsWithDetails = shops.map(shop => {
       const distance = GeoService.calculateDistance(
@@ -1656,10 +1667,10 @@ exports.getAvailableShops = async (req, res) => {
         shop.address.location.coordinates[1],
         shop.address.location.coordinates[0]
       );
-      
+
       const deliveryFee = calculateDeliveryFee(shop, distance, 0);
       const deliveryTime = shop.deliverySettings.estimatedDeliveryTime;
-      
+
       return {
         ...shop,
         distance: parseFloat(distance.toFixed(1)),
@@ -1668,27 +1679,27 @@ exports.getAvailableShops = async (req, res) => {
         isOpen: shop.isShopOpenNow ? shop.isShopOpenNow() : false
       };
     });
-    
+
     // Filter by category if provided
     let filteredShops = shopsWithDetails;
     if (category) {
-      filteredShops = shopsWithDetails.filter(shop => 
+      filteredShops = shopsWithDetails.filter(shop =>
         shop.categories.includes(category)
       );
     }
-    
+
     // Filter by search if provided
     if (search) {
-      filteredShops = shopsWithDetails.filter(shop => 
+      filteredShops = shopsWithDetails.filter(shop =>
         shop.name.toLowerCase().includes(search.toLowerCase())
       );
     }
-    
+
     // Sort by distance
     filteredShops.sort((a, b) => a.distance - b.distance);
-    
+
     ResponseHandler.success(res, { shops: filteredShops }, 'Shops fetched successfully');
-    
+
   } catch (error) {
     logger.error(`Get available shops error: ${error.message}`);
     ResponseHandler.error(res, error.message, 500);
@@ -2496,7 +2507,7 @@ exports.exportOrders = async (req, res) => {
     if (format === 'csv') {
       // Convert to CSV
       const csv = json2csv(data, { fields: Object.keys(data[0] || {}) });
-      
+
       res.setHeader('Content-Type', 'text/csv');
       res.setHeader('Content-Disposition', `attachment; filename=orders_${Date.now()}.csv`);
       return res.send(csv);
@@ -2504,20 +2515,20 @@ exports.exportOrders = async (req, res) => {
       // Create Excel workbook
       const workbook = new ExcelJS.Workbook();
       const worksheet = workbook.addWorksheet('Orders');
-      
+
       // Add headers
       const headers = Object.keys(data[0] || {});
       worksheet.addRow(headers);
-      
+
       // Add data
       data.forEach(row => {
         worksheet.addRow(Object.values(row));
       });
-      
+
       // Set response headers
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', `attachment; filename=orders_${Date.now()}.xlsx`);
-      
+
       // Send file
       await workbook.xlsx.write(res);
       res.end();
@@ -2535,7 +2546,7 @@ exports.getOrderStats = async (req, res) => {
     const { period = 'today', shopId } = req.query;
 
     let matchQuery = {};
-    
+
     if (shopId) {
       matchQuery.shop = shopId;
     }
@@ -2599,7 +2610,7 @@ exports.getOrderStats = async (req, res) => {
       const status = item._id;
       const count = item.count;
       stats.total += count;
-      
+
       if (stats.hasOwnProperty(status)) {
         stats[status] = count;
       }
