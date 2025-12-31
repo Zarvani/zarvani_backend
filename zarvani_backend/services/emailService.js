@@ -45,21 +45,21 @@ class EmailService {
       </head>
       <body>
         <div class="container">
-          <h2>Welcome to Zarvani!</h2>
+          <h2>Welcome to Yetzo!</h2>
           <p>Hi ${name},</p>
           <p>Your OTP for verification is:</p>
           <div class="otp-box">${otp}</div>
           <p>This OTP will expire in 10 minutes.</p>
           <p>If you didn't request this, please ignore this email.</p>
           <div class="footer">
-            <p>© ${new Date().getFullYear()} Zarvani. All rights reserved.</p>
+            <p>© ${new Date().getFullYear()} Yetzo. All rights reserved.</p>
           </div>
         </div>
       </body>
       </html>
     `;
     
-    return await this.sendEmail(email, 'Your Zarvani OTP', html);
+    return await this.sendEmail(email, 'Your Yetzo OTP', html);
   }
   
   static async sendBookingConfirmation(email, bookingDetails) {
@@ -79,13 +79,13 @@ class EmailService {
             <p><strong>Provider:</strong> ${bookingDetails.providerName}</p>
             <p><strong>Amount:</strong> ₹${bookingDetails.amount}</p>
           </div>
-          <p>Thank you for choosing Zarvani!</p>
+          <p>Thank you for choosing Yetzo!</p>
         </div>
       </body>
       </html>
     `;
     
-    return await this.sendEmail(email, 'Booking Confirmation - Zarvani', html);
+    return await this.sendEmail(email, 'Booking Confirmation - Yetzo', html);
   }
   
   static async sendPasswordReset(email, resetLink, name) {
@@ -105,7 +105,7 @@ class EmailService {
       </html>
     `;
     
-    return await this.sendEmail(email, 'Password Reset - Zarvani', html);
+    return await this.sendEmail(email, 'Password Reset - Yetzo', html);
   }
   
   static async sendWelcomeEmail(email, name, role) {
@@ -114,20 +114,20 @@ class EmailService {
       <html>
       <body>
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-          <h2>Welcome to Zarvani!</h2>
+          <h2>Welcome to Yetzo!</h2>
           <p>Hi ${name},</p>
-          <p>Thank you for joining Zarvani as a ${role}.</p>
+          <p>Thank you for joining Yetzo as a ${role}.</p>
           <p>We're excited to have you on board!</p>
           ${role === 'provider' || role === 'shop' ? `
             <p>Your account is currently under review. We'll notify you once it's approved.</p>
           ` : ''}
-          <p>Best regards,<br>Team Zarvani</p>
+          <p>Best regards,<br>Team Yetzo</p>
         </div>
       </body>
       </html>
     `;
     
-    return await this.sendEmail(email, 'Welcome to Zarvani', html);
+    return await this.sendEmail(email, 'Welcome to Yetzo', html);
   }
 }
 

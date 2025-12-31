@@ -1,4 +1,4 @@
-# Zarvani Backend - Service Marketplace API
+# Yetzo Backend - Service Marketplace API
 
 A comprehensive RESTful API backend for a multi-vendor service marketplace platform built with Node.js, Express.js, and MongoDB.
 
@@ -55,7 +55,7 @@ A comprehensive RESTful API backend for a multi-vendor service marketplace platf
 ### 1. Clone the repository
 ```bash
 git clone <repository-url>
-cd ZarvaniBackend
+cd YetzoBackend
 ```
 
 ### 2. Install dependencies
@@ -72,7 +72,7 @@ Create a `.env` file in the root directory and add the following:
 PORT=5000
 
 # MongoDB
-MONGODB_URI=mongodb://localhost:27017/zarvani
+MONGODB_URI=mongodb://localhost:27017/Yetzo
 
 # JWT
 JWT_SECRET=your_jwt_secret_key
@@ -90,7 +90,7 @@ EMAIL_HOST=smtp.gmail.com
 EMAIL_PORT=587
 EMAIL_USER=your_email@gmail.com
 EMAIL_PASSWORD=your_app_specific_password
-EMAIL_FROM=Zarvani <noreply@zarvani.com>
+EMAIL_FROM=Yetzo <noreply@Yetzo.com>
 
 # Payment Gateway
 RAZORPAY_KEY_ID=your_razorpay_key
@@ -120,7 +120,7 @@ npm start
 ## 📁 Project Structure
 
 ```
-ZarvaniBackend/
+YetzoBackend/
 ├── config/                 # Configuration files
 │   ├── db.js              # MongoDB connection
 │   └── env.js             # Environment variables
@@ -383,7 +383,7 @@ This project is licensed under the ISC License.
 
 ## 👥 Support
 
-For support, email support@zarvani.com or create an issue in the repository.
+For support, email support@Yetzo.com or create an issue in the repository.
 
 ## 🙏 Acknowledgments
 
@@ -395,4 +395,4 @@ For support, email support@zarvani.com or create an issue in the repository.
 
 ---
 
-**Built with ❤️ for Zarvani**
+**Built with ❤️ for Yetzo**

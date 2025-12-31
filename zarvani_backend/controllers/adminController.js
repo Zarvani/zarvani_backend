@@ -108,7 +108,7 @@ exports.verifyProvider = async (req, res) => {
     if (provider.email) {
       await EmailService.sendEmail(
         provider.email,
-        'Account Approved - Zarvani',
+        'Account Approved - Yetzo',
         `<p>Congratulations ${provider.name}! Your service provider account has been approved.</p>`
       );
     }
@@ -144,7 +144,7 @@ exports.rejectProvider = async (req, res) => {
     if (provider.email) {
       await EmailService.sendEmail(
         provider.email,
-        'Account Verification Update - Zarvani',
+        'Account Verification Update - Yetzo',
         `<p>Dear ${provider.name}, your application has been rejected. Reason: ${reason}</p>`
       );
     }
@@ -519,7 +519,7 @@ exports.verifyShop = async (req, res) => {
     if (shop.email) {
       await EmailService.sendEmail(
         shop.email,
-        'Shop Approved - Zarvani',
+        'Shop Approved - Yetzo',
         `<p>Congratulations ${shop.name}! Your shop has been approved and is now live.</p>`
       );
     }
@@ -555,7 +555,7 @@ exports.rejectShop = async (req, res) => {
     if (shop.email) {
       await EmailService.sendEmail(
         shop.email,
-        'Shop Verification Update - Zarvani',
+        'Shop Verification Update - Yetzo',
         `<p>Dear ${shop.name}, your shop application has been rejected. Reason: ${reason}</p>`
       );
     }

@@ -15,35 +15,145 @@ exports.getProfile = async (req, res) => {
 // Update Provider Profile
 exports.updateProfile = async (req, res) => {
   try {
-    const { name, email, experience, specializations, workingHours, bankDetails } = req.body;
+    const { 
+      name, email, experience, specializations, workingHours, 
+      bankDetails, address, vehicle 
+    } = req.body;
+    
     const updates = {};
     
+    // Basic info
     if (name) updates.name = name;
-    if (email) updates.email = email;
-    if (experience) updates.experience = experience;
-    if (specializations) updates.specializations = specializations;
-    if (workingHours) updates.workingHours = workingHours;
-    if (bankDetails) updates.bankDetails = bankDetails;
-    
-    if (req.file) {
-      if (req.user.profilePicture?.publicId) {
-        await deleteFromCloudinary(req.user.profilePicture.publicId);
+    if (email) {
+      // Validate email format
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        return ResponseHandler.error(res, "Invalid email format", 400);
       }
-      updates.profilePicture = {
-        url: req.file.path,
-        publicId: req.file.filename
-      };
+      updates.email = email.toLowerCase();
     }
     
+    // Parse JSON strings
+    if (experience) {
+      updates.experience = typeof experience === 'string' ? JSON.parse(experience) : experience;
+    }
+    
+    if (specializations) {
+      updates.specializations = Array.isArray(specializations) 
+        ? specializations 
+        : JSON.parse(specializations);
+    }
+    
+    if (workingHours) {
+      updates.workingHours = typeof workingHours === 'string' 
+        ? JSON.parse(workingHours) 
+        : workingHours;
+    }
+    
+    if (bankDetails) {
+      const parsedBankDetails = typeof bankDetails === 'string' 
+        ? JSON.parse(bankDetails) 
+        : bankDetails;
+      
+      // Validate bank details
+      if (parsedBankDetails.accountNumber && !/^\d{9,18}$/.test(parsedBankDetails.accountNumber)) {
+        return ResponseHandler.error(res, "Account number must be 9-18 digits", 400);
+      }
+      
+      if (parsedBankDetails.ifscCode && !/^[A-Z]{4}0[A-Z0-9]{6}$/i.test(parsedBankDetails.ifscCode)) {
+        return ResponseHandler.error(res, "Invalid IFSC code format", 400);
+      }
+      
+      updates.bankDetails = parsedBankDetails;
+    }
+    
+    // Handle address with geocoding
+    if (address) {
+      const parsedAddress = typeof address === 'string' ? JSON.parse(address) : address;
+      updates.address = parsedAddress;
+      
+      // Only geocode if we have enough address data
+      if (parsedAddress.addressLine1 && parsedAddress.city) {
+        const addressString = [
+          parsedAddress.addressLine1,
+          parsedAddress.addressLine2,
+          parsedAddress.landmark,
+          parsedAddress.city,
+          parsedAddress.state,
+          parsedAddress.pincode,
+          parsedAddress.country
+        ].filter(Boolean).join(', ');
+        
+        try {
+          const geoResult = await GeoService.getCoordinatesFromAddress(addressString);
+          if (geoResult.success) {
+            updates['address.location'] = {
+              type: 'Point',
+              coordinates: geoResult.coordinates
+            };
+          }
+        } catch (geoError) {
+          console.warn('Geocoding failed:', geoError.message);
+          // Continue without geocoding - address will still be saved
+        }
+      }
+    }
+    
+    if (vehicle) {
+      updates.vehicle = typeof vehicle === 'string' ? JSON.parse(vehicle) : vehicle;
+    }
+    
+    // Handle profile picture upload
+    if (req.file) {
+      try {
+        // Delete old image if exists
+        if (req.user.profilePicture?.publicId) {
+          await deleteFromCloudinary(req.user.profilePicture.publicId);
+        }
+        
+        updates.profilePicture = {
+          url: req.file.path,
+          publicId: req.file.filename
+        };
+      } catch (uploadError) {
+        logger.error(`Image upload error: ${uploadError.message}`);
+        return ResponseHandler.error(res, "Failed to upload image", 500);
+      }
+    }
+    
+    // Update the provider
     const provider = await ServiceProvider.findByIdAndUpdate(
       req.user._id,
-      updates,
-      { new: true, runValidators: true }
-    );
+      { $set: updates },
+      { 
+        new: true, 
+        runValidators: true,
+        select: '-password -otp -resetPasswordToken -resetPasswordExpire'
+      }
+    ).lean();
+    
+    if (!provider) {
+      return ResponseHandler.error(res, "Service provider not found", 404);
+    }
     
     ResponseHandler.success(res, { provider }, 'Profile updated successfully');
+    
   } catch (error) {
-    ResponseHandler.error(res, error.message, 500);
+    logger.error(`Update service provider profile error: ${error.message}`, error);
+    
+    // Handle validation errors
+    if (error.name === 'ValidationError') {
+      const errors = Object.values(error.errors).map(err => err.message);
+      return ResponseHandler.error(res, errors.join(', '), 400);
+    }
+    
+    // Handle duplicate key errors
+    if (error.code === 11000) {
+      const field = Object.keys(error.keyPattern)[0];
+      return ResponseHandler.error(res, `${field} already exists`, 400);
+    }
+    
+    ResponseHandler.error(res, "Internal server error", 500);
   }
 };
 

@@ -700,47 +700,6 @@ exports.forgotPassword = async (req, res) => {
   }
 };
 
-// Reset Password
-exports.resetPassword = async (req, res) => {
-  try {
-    const { token, newPassword, role = 'user' } = req.body;
-    
-    let Model;
-    if (role === 'user') Model = User;
-    else if (role === 'provider') Model = ServiceProvider;
-    else if (role === 'shop') Model = Shop;
-    else if (role === 'admin') Model = Admin;
-    else return ResponseHandler.error(res, 'Invalid role', 400);
-    
-    // Hash token
-    const resetPasswordToken = crypto
-      .createHash('sha256')
-      .update(token)
-      .digest('hex');
-    
-    const user = await Model.findOne({
-      resetPasswordToken,
-      resetPasswordExpire: { $gt: Date.now() }
-    });
-    
-    if (!user) {
-      return ResponseHandler.error(res, 'Invalid or expired reset token', 400);
-    }
-    
-    // Set new password
-    user.password = newPassword;
-    user.resetPasswordToken = undefined;
-    user.resetPasswordExpire = undefined;
-    
-    await user.save();
-    
-    ResponseHandler.success(res, null, 'Password reset successful');
-  } catch (error) {
-    logger.error(`Reset password error: ${error.message}`);
-    ResponseHandler.error(res, error.message, 500);
-  }
-};
-
 // Change Password
 exports.changePassword = async (req, res) => {
   try {
@@ -817,29 +776,51 @@ exports.logout = async (req, res) => {
 // Get Current User
 exports.getCurrentUser = async (req, res) => {
   try {
-    const { id, role } = req.user; // coming from middleware
+    const { id, role } = req.user;
 
     if (!id || !role) {
       return ResponseHandler.error(res, "Invalid token", 401);
     }
 
     let Model;
+    let query;
 
     // Select model based on role
-    if (role === "user") Model = User;
-    else if (role === "provider") Model = ServiceProvider;
-    else if (role === "shop") Model = Shop;
-    else if (role === "admin" || role === "superadmin") Model = Admin;
-    else return ResponseHandler.error(res, "Invalid role", 400);
+    switch (role) {
+      case "user":
+        Model = User;
+        query = Model.findById(id).select("-password -otp -resetPasswordToken -resetPasswordExpire");
+        break;
+      case "provider":
+        Model = ServiceProvider;
+        query = Model.findById(id).select("-password -otp -resetPasswordToken -resetPasswordExpire");
+        break;
+      case "shop":
+        Model = Shop;
+        query = Model.findById(id).select("-password -otp -resetPasswordToken -resetPasswordExpire -deliveryBoys.password");
+        break;
+      case "admin":
+      case "superadmin":
+        Model = Admin;
+        query = Model.findById(id).select("-password");
+        break;
+      default:
+        return ResponseHandler.error(res, "Invalid role", 400);
+    }
 
     // Fetch user from DB
-    let user = await Model.findById(id)
-      .select("-password -otp -otpExpiry -resetPasswordToken -resetPasswordExpire");
+    let user = await query;
 
     if (!user) {
       return ResponseHandler.error(res, "User not found", 404);
     }
 
+    // Convert to plain object
+    user = user.toObject ? user.toObject() : user;
+    
+    // Add role to user object for frontend
+    user.role = role;
+    
     return ResponseHandler.success(
       res,
       {
@@ -849,8 +830,8 @@ exports.getCurrentUser = async (req, res) => {
       "User fetched successfully"
     );
   } catch (error) {
-    logger.error(`Get current user error: ${error.message}`);
-    ResponseHandler.error(res, error.message, 500);
+    logger.error(`Get current user error: ${error.message}`, error);
+    ResponseHandler.error(res, "Internal server error", 500);
   }
 };
 

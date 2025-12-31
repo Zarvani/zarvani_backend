@@ -482,32 +482,37 @@ exports.markBookingPaid = async (req, res) => {
         const { bookingId } = req.params;
         const { paymentMethod = 'cash', transactionId } = req.body;
         const providerId = req.user._id;
-        
         const booking = await Booking.findOne({
             _id: bookingId,
             provider: providerId,
             status: { $in: ['completed', 'in-progress'] }
         });
-        
         if (!booking) {
             return ResponseHandler.error(res, 'Booking not found or not authorized', 404);
         }
-        
-        // Determine if payment is personal or to company
+
+        // 2️⃣ If payment already done (online at booking time), skip payment logic
+        if (booking.payment?.status === 'paid') {
+            booking.status = 'completed';  // mark service as completed
+            booking.completedAt = new Date();
+
+            await booking.save();
+
+            return ResponseHandler.success(res, {
+                booking,
+                commission: null
+            }, 'Service completed successfully');
+        }
+
         const personalPaymentMethods = ['cash', 'personal_upi', 'cod'];
         const isPersonalPayment = personalPaymentMethods.includes(paymentMethod);
-        
-        // Update booking payment info
         booking.payment.method = paymentMethod;
         booking.payment.status = 'paid';
         booking.payment.paidAt = new Date();
         booking.payment.receivedBy = isPersonalPayment ? 'provider' : 'company';
-        
         if (transactionId) {
             booking.payment.transactionId = transactionId;
         }
-        
-        // Create payment record
         const payment = await Payment.create({
             transactionId: transactionId || `PAY-${Date.now()}`,
             booking: booking._id,
@@ -520,31 +525,36 @@ exports.markBookingPaid = async (req, res) => {
             status: 'success',
             paymentDate: new Date()
         });
-        
-        // Process commission based on payment destination
+
+        // 6️⃣ Handle commission
         if (isPersonalPayment) {
-            // Personal payment - track commission
+            // Track pending commission
             await CommissionService.trackPersonalPayment(payment);
-            
+
             booking.payment.commissionStatus = 'pending';
             booking.payment.commissionAmount = payment.commission.pendingCommission;
             booking.payment.commissionDueDate = payment.pendingCommission.dueDate;
         } else {
-            // Company payment - auto payout
+            // Auto payout for company payment
             await CommissionService.processAutoPayout(payment);
             booking.payment.commissionStatus = 'not_applicable';
         }
-        
+
+        // 7️⃣ Update service status
+        booking.status = 'completed';
+        booking.completedAt = new Date();
+
         await booking.save();
-        
-        // Send notification to user
+
+        // 8️⃣ Send notification to user
         await PushNotificationService.sendToUser(
             booking.user,
             'Payment Received ✅',
             `Payment of ₹${booking.totalAmount} has been received for your ${booking.serviceDetails?.title || 'booking'}.`
         );
-        
-        ResponseHandler.success(res, { 
+
+        // 9️⃣ Return response
+        ResponseHandler.success(res, {
             booking,
             commission: isPersonalPayment ? {
                 amount: payment.commission.pendingCommission,
@@ -552,7 +562,7 @@ exports.markBookingPaid = async (req, res) => {
                 status: 'pending'
             } : null
         }, 'Payment recorded successfully');
-        
+
     } catch (error) {
         logger.error(`Mark booking paid error: ${error.message}`);
         ResponseHandler.error(res, error.message, 500);
