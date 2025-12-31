@@ -21,6 +21,7 @@ const orderRoutes = require('./routes/orderRoutes');
 const productRoutes = require('./routes/productRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
 const cartRoutes=require('./routes/cartRoutes')
+const commission=require('./routes/commissionRoutes')
 const app = express();
 const server = http.createServer(app);
 
@@ -68,6 +69,7 @@ app.use(`/api/v1/orders`, orderRoutes);
 app.use(`/api/v1/products`, productRoutes);
 app.use(`/api/v1/payments`, paymentRoutes);
 app.use(`/api/v1/cart`, cartRoutes);
+app.use(`/api/v1/commission`,commission);
 // Socket.IO connection handling
 io.on('connection', (socket) => {
   logger.info(`Socket connected: ${socket.id}`);

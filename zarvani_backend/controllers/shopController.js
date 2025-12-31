@@ -20,49 +20,180 @@ exports.getProfile = async (req, res) => {
 // Update Shop Profile
 exports.updateProfile = async (req, res) => {
   try {
-    const { name, ownerName, email, address, workingHours, categories, gstNumber, bankDetails } = req.body;
+    const { 
+      name, ownerName, email, address, workingHours, categories, 
+      gstNumber, fssaiLicense, bankDetails, deliverySettings, 
+      features, sla, isOpen, ownerPhone 
+    } = req.body;
+    
     const updates = {};
     
+    // Basic info
     if (name) updates.name = name;
     if (ownerName) updates.ownerName = ownerName;
-    if (email) updates.email = email;
+    
+    if (email) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        return ResponseHandler.error(res, "Invalid email format", 400);
+      }
+      updates.email = email.toLowerCase();
+    }
+    
+    if (ownerPhone) {
+      // Ensure phone starts with +91
+      const phone = ownerPhone.startsWith('+91') ? ownerPhone : `+91${ownerPhone}`;
+      updates.ownerPhone = phone;
+    }
+    
+    // Parse JSON data
     if (address) {
-      updates.address = address;
+      const parsedAddress = typeof address === 'string' ? JSON.parse(address) : address;
+      updates.address = parsedAddress;
       
-      // Get coordinates for address
-      const geoResult = await GeoService.getCoordinatesFromAddress(address);
-      if (geoResult.success) {
-        updates['address.location'] = {
-          type: 'Point',
-          coordinates: geoResult.coordinates
-        };
+      // Geocode address
+      if (parsedAddress.addressLine1 && parsedAddress.city) {
+        const addressString = [
+          parsedAddress.addressLine1,
+          parsedAddress.addressLine2,
+          parsedAddress.landmark,
+          parsedAddress.city,
+          parsedAddress.state,
+          parsedAddress.pincode,
+          parsedAddress.country || 'India'
+        ].filter(Boolean).join(', ');
+        
+        try {
+          const geoResult = await GeoService.getCoordinatesFromAddress(addressString);
+          if (geoResult.success) {
+            updates['address.location'] = {
+              type: 'Point',
+              coordinates: geoResult.coordinates
+            };
+          }
+        } catch (geoError) {
+          console.warn('Geocoding failed:', geoError.message);
+        }
       }
     }
-    if (workingHours) updates.workingHours = workingHours;
-    if (categories) updates.categories = categories;
-    if (gstNumber) updates.gstNumber = gstNumber;
-    if (bankDetails) updates.bankDetails = bankDetails;
     
+    if (workingHours) {
+      updates.workingHours = typeof workingHours === 'string' 
+        ? JSON.parse(workingHours) 
+        : workingHours;
+    }
+    
+    if (categories) {
+      updates.categories = typeof categories === 'string' 
+        ? JSON.parse(categories) 
+        : categories;
+    }
+    
+    if (gstNumber) {
+      // Basic GST validation
+      const gstRegex = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
+      if (!gstRegex.test(gstNumber)) {
+        return ResponseHandler.error(res, "Invalid GST number format", 400);
+      }
+      updates.gstNumber = gstNumber;
+    }
+    
+    if (fssaiLicense) {
+      updates.fssaiLicense = fssaiLicense;
+    }
+    
+    if (bankDetails) {
+      const parsedBankDetails = typeof bankDetails === 'string' 
+        ? JSON.parse(bankDetails) 
+        : bankDetails;
+      
+      // Validate bank details
+      if (parsedBankDetails.accountNumber && !/^\d{9,18}$/.test(parsedBankDetails.accountNumber)) {
+        return ResponseHandler.error(res, "Account number must be 9-18 digits", 400);
+      }
+      
+      if (parsedBankDetails.ifscCode && !/^[A-Z]{4}0[A-Z0-9]{6}$/i.test(parsedBankDetails.ifscCode)) {
+        return ResponseHandler.error(res, "Invalid IFSC code format", 400);
+      }
+      
+      // Validate UPI ID format if provided
+      if (parsedBankDetails.upiId && !/^[\w.-]+@[\w.-]+$/i.test(parsedBankDetails.upiId)) {
+        return ResponseHandler.error(res, "Invalid UPI ID format (e.g., username@upi)", 400);
+      }
+      
+      updates.bankDetails = parsedBankDetails;
+    }
+    
+    if (deliverySettings) {
+      updates.deliverySettings = typeof deliverySettings === 'string' 
+        ? JSON.parse(deliverySettings) 
+        : deliverySettings;
+    }
+    
+    if (features) {
+      updates.features = typeof features === 'string' 
+        ? JSON.parse(features) 
+        : features;
+    }
+    
+    if (sla) {
+      updates.sla = typeof sla === 'string' 
+        ? JSON.parse(sla) 
+        : sla;
+    }
+    
+    if (isOpen !== undefined) {
+      updates.isOpen = isOpen === 'true' || isOpen === true;
+    }
+    
+    // Handle logo upload
     if (req.file) {
-      if (req.user.logo?.publicId) {
-        await deleteFromCloudinary(req.user.logo.publicId);
+      try {
+        if (req.user.logo?.publicId) {
+          await deleteFromCloudinary(req.user.logo.publicId);
+        }
+        
+        updates.logo = {
+          url: req.file.path,
+          publicId: req.file.filename
+        };
+      } catch (uploadError) {
+        logger.error(`Logo upload error: ${uploadError.message}`);
+        return ResponseHandler.error(res, "Failed to upload logo", 500);
       }
-      updates.logo = {
-        url: req.file.path,
-        publicId: req.file.filename
-      };
     }
     
+    // Update the shop
     const shop = await Shop.findByIdAndUpdate(
       req.user._id,
-      updates,
-      { new: true, runValidators: true }
-    );
+      { $set: updates },
+      { 
+        new: true, 
+        runValidators: true,
+        select: '-password -otp -resetPasswordToken -resetPasswordExpire -deliveryBoys.password'
+      }
+    ).lean();
+    
+    if (!shop) {
+      return ResponseHandler.error(res, "Shop not found", 404);
+    }
     
     ResponseHandler.success(res, { shop }, 'Profile updated successfully');
+    
   } catch (error) {
-    logger.error(`Update shop profile error: ${error.message}`);
-    ResponseHandler.error(res, error.message, 500);
+    logger.error(`Update shop profile error: ${error.message}`, error);
+    
+    if (error.name === 'ValidationError') {
+      const errors = Object.values(error.errors).map(err => err.message);
+      return ResponseHandler.error(res, errors.join(', '), 400);
+    }
+    
+    if (error.code === 11000) {
+      const field = Object.keys(error.keyPattern)[0];
+      return ResponseHandler.error(res, `${field} already exists`, 400);
+    }
+    
+    ResponseHandler.error(res, "Internal server error", 500);
   }
 };
 
