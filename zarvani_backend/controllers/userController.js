@@ -54,29 +54,135 @@ exports.updateProfile = async (req, res) => {
 // Add Address
 exports.addAddress = async (req, res) => {
   try {
-    const address = req.body;
-    
-    // Get coordinates
-    const geoResult = await GeoService.getCoordinatesFromAddress(address);
-    if (geoResult.success) {
-      address.location = {
+    const userId = req.user._id;
+    const addressData = req.body;
+
+    // Get geo coordinates
+    const geoResult = await GeoService.getCoordinatesFromAddress(addressData);
+    if (geoResult?.success) {
+      addressData.location = {
+        type: 'Point',
+        coordinates: geoResult.coordinates // [lng, lat]
+      };
+    }
+
+    const user = await User.findById(userId);
+
+    // First address → default
+    if (user.addresses.length === 0) {
+      addressData.isDefault = true;
+    }
+
+    user.addresses.push(addressData);
+    await user.save();
+
+    ResponseHandler.success(res, user.addresses, 'Address added successfully');
+  } catch (error) {
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+exports.updateAddress = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { addressId } = req.params;
+    const updateData = req.body;
+
+    const user = await User.findById(userId);
+
+    const address = user.addresses.id(addressId);
+    if (!address) {
+      return ResponseHandler.error(res, 'Address not found', 404);
+    }
+
+    // Update geo if address changed
+    const geoResult = await GeoService.getCoordinatesFromAddress(updateData);
+    if (geoResult?.success) {
+      updateData.location = {
         type: 'Point',
         coordinates: geoResult.coordinates
       };
     }
-    
-    const user = await User.findById(req.user._id);
-    
-    // If this is the first address or marked as default
-    if (user.addresses.length === 0 || address.isDefault) {
-      user.addresses.forEach(addr => addr.isDefault = false);
-      address.isDefault = true;
+
+    Object.assign(address, updateData);
+
+    // If set as default
+    if (updateData.isDefault) {
+      user.addresses.forEach(addr => {
+        if (addr._id.toString() !== addressId) {
+          addr.isDefault = false;
+        }
+      });
     }
-    
-    user.addresses.push(address);
+
     await user.save();
-    
-    ResponseHandler.success(res, { addresses: user.addresses }, 'Address added successfully');
+
+    ResponseHandler.success(res, user.addresses, 'Address updated successfully');
+  } catch (error) {
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+exports.setDefaultAddress = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { addressId } = req.params;
+
+    const user = await User.findById(userId);
+
+    let found = false;
+    user.addresses.forEach(addr => {
+      if (addr._id.toString() === addressId) {
+        addr.isDefault = true;
+        found = true;
+      } else {
+        addr.isDefault = false;
+      }
+    });
+
+    if (!found) {
+      return ResponseHandler.error(res, 'Address not found', 404);
+    }
+
+    await user.save();
+    ResponseHandler.success(res, user.addresses, 'Default address updated');
+  } catch (error) {
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+exports.deleteAddress = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { addressId } = req.params;
+
+    const user = await User.findById(userId);
+
+    const address = user.addresses.id(addressId);
+    if (!address) {
+      return ResponseHandler.error(res, 'Address not found', 404);
+    }
+
+    const wasDefault = address.isDefault;
+    address.remove();
+
+    // If deleted address was default → make first one default
+    if (wasDefault && user.addresses.length > 0) {
+      user.addresses[0].isDefault = true;
+    }
+
+    await user.save();
+    ResponseHandler.success(res, user.addresses, 'Address deleted successfully');
+  } catch (error) {
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+exports.getAddresses = async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id);
+
+    const addresses = user.addresses.sort(
+      (a, b) => b.isDefault - a.isDefault
+    );
+
+    ResponseHandler.success(res, addresses, 'Addresses fetched');
   } catch (error) {
     ResponseHandler.error(res, error.message, 500);
   }

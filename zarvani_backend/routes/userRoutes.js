@@ -17,6 +17,10 @@ router.use(authorize('user'));
 router.get('/profile', userController.getProfile);
 router.put('/profile', uploadProfile, userController.updateProfile);
 router.post('/address', userController.addAddress);
+router.get('/address', userController.getAddresses);
+router.put('/address/:addressId', userController.updateAddress);
+router.patch('/address/:addressId/default', userController.setDefaultAddress);
+router.delete('/address/:addressId', userController.deleteAddress);
 router.get('/bookings', userController.getBookingHistory);
 
 
