@@ -175,10 +175,10 @@ router.put(
 
 // Cancel order as admin
 router.put(
-  '/:orderId/cancel',
+  '/:orderId/Admincancel',
   protect,
   authorize('admin', 'super_admin'),
-  orderController.cancelOrder
+  orderController.AdmincancelOrder
 );
 
 // Get order analytics

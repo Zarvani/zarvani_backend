@@ -2137,7 +2137,7 @@ exports.updateOrder = async (req, res) => {
 };
 
 // Admin cancel order
-exports.cancelOrder = async (req, res) => {
+exports.AdmincancelOrder = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
 
