@@ -1,9 +1,9 @@
 // ============= controllers/userController.js =============
 const User = require('../models/User');
-const Booking =require("../models/Booking")
+const Booking = require("../models/Booking")
 const { Review } = require('../models/Review');
 const ResponseHandler = require('../utils/responseHandler');
-const {Service} =require('../models/Service');
+const { Service } = require('../models/Service');
 const { deleteFromCloudinary } = require('../middleware/uploadMiddleware');
 const GeoService = require('../services/geoService');
 
@@ -22,29 +22,29 @@ exports.updateProfile = async (req, res) => {
   try {
     const { name, email, preferences } = req.body;
     const updates = {};
-    
+
     if (name) updates.name = name;
     if (email) updates.email = email;
     if (preferences) updates.preferences = preferences;
-    
+
     if (req.file) {
       // Delete old profile picture
       if (req.user.profilePicture?.publicId) {
         await deleteFromCloudinary(req.user.profilePicture.publicId);
       }
-      
+
       updates.profilePicture = {
         url: req.file.path,
         publicId: req.file.filename
       };
     }
-    
+
     const user = await User.findByIdAndUpdate(
       req.user._id,
       updates,
       { new: true, runValidators: true }
     );
-    
+
     ResponseHandler.success(res, { user }, 'Profile updated successfully');
   } catch (error) {
     ResponseHandler.error(res, error.message, 500);
@@ -154,6 +154,9 @@ exports.deleteAddress = async (req, res) => {
     const { addressId } = req.params;
 
     const user = await User.findById(userId);
+    if (!user) {
+      return ResponseHandler.error(res, 'User not found', 404);
+    }
 
     const address = user.addresses.id(addressId);
     if (!address) {
@@ -161,19 +164,27 @@ exports.deleteAddress = async (req, res) => {
     }
 
     const wasDefault = address.isDefault;
-    address.remove();
 
-    // If deleted address was default → make first one default
+    // ✅ Correct way to remove subdocument
+    user.addresses.pull(addressId);
+
+    // ✅ If deleted address was default → set first address as default
     if (wasDefault && user.addresses.length > 0) {
       user.addresses[0].isDefault = true;
     }
 
     await user.save();
-    ResponseHandler.success(res, user.addresses, 'Address deleted successfully');
+
+    return ResponseHandler.success(
+      res,
+      user.addresses,
+      'Address deleted successfully'
+    );
   } catch (error) {
-    ResponseHandler.error(res, error.message, 500);
+    return ResponseHandler.error(res, error.message, 500);
   }
 };
+
 exports.getAddresses = async (req, res) => {
   try {
     const user = await User.findById(req.user._id);
@@ -192,18 +203,18 @@ exports.getAddresses = async (req, res) => {
 exports.getBookingHistory = async (req, res) => {
   try {
     const { page = 1, limit = 10, status } = req.query;
-    
+
     const query = { user: req.user._id };
     if (status) query.status = status;
-    
+
     const bookings = await Booking.find(query)
       .populate('service provider')
       .sort({ createdAt: -1 })
       .limit(limit * 1)
       .skip((page - 1) * limit);
-    
+
     const count = await Booking.countDocuments(query);
-    
+
     ResponseHandler.paginated(res, bookings, page, limit, count);
   } catch (error) {
     ResponseHandler.error(res, error.message, 500);
@@ -214,7 +225,7 @@ exports.getBookingHistory = async (req, res) => {
 exports.submitReview = async (req, res) => {
   try {
     const { booking, provider, shop, product, rating, comment } = req.body;
-    
+
     const review = await Review.create({
       user: req.user._id,
       booking,
@@ -225,7 +236,7 @@ exports.submitReview = async (req, res) => {
       comment,
       isVerifiedPurchase: !!booking
     });
-    
+
     // Update average rating
     if (provider) {
       const Provider = require('../models/ServiceProvider');
@@ -236,7 +247,7 @@ exports.submitReview = async (req, res) => {
         'ratings.count': reviews.length
       });
     }
-    
+
     ResponseHandler.success(res, { review }, 'Review submitted successfully', 201);
   } catch (error) {
     ResponseHandler.error(res, error.message, 500);
@@ -281,7 +292,7 @@ exports.getServiceById = async (req, res) => {
     const { id } = req.params;
 
     const service = await Service.findById(id);
-    
+
     if (!service) {
       return res.status(404).json({
         success: false,
