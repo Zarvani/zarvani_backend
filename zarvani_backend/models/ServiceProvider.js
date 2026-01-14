@@ -40,7 +40,7 @@ const serviceProviderSchema = new mongoose.Schema({
     addressLine2: String,
     city: String,
     state: String,
-    country:String,
+    country: String,
     pincode: String,
     location: {
       type: {
@@ -135,7 +135,7 @@ const serviceProviderSchema = new mongoose.Schema({
       "pet-grooming",
       "other"
     ]
-},
+  },
   specializations: [String],
   portfolio: [{
     title: String,
@@ -205,27 +205,6 @@ const serviceProviderSchema = new mongoose.Schema({
   },
   resetPasswordToken: String,
   resetPasswordExpire: Date,
-  earnings: {
-    total: { type: Number, default: 0 },          // Total earnings from all services
-    lastUpdated: { type: Date, default: Date.now }
-  },
-  
-  // ✅ ADD: Commission tracking separately
-  commission: {
-    due: { type: Number, default: 0 },            // Total commission due to company
-    paid: { type: Number, default: 0 },           // Total commission paid to company
-    lastPaymentDate: Date
-  },
-  
-  // ✅ ADD: Bank/UPI details for auto-payout
-  bankDetails: {
-    upiId: String,
-    accountHolderName: String,
-    accountNumber: String,
-    ifscCode: String,
-    bankName: String,
-    branch: String
-  },
 }, {
   timestamps: true
 });
@@ -234,7 +213,7 @@ const serviceProviderSchema = new mongoose.Schema({
 serviceProviderSchema.index({ 'address.location': '2dsphere' });
 
 // Hash password
-serviceProviderSchema.pre('save', async function(next) {
+serviceProviderSchema.pre('save', async function (next) {
   if (!this.isModified('password')) {
     return next();
   }
@@ -244,12 +223,12 @@ serviceProviderSchema.pre('save', async function(next) {
 });
 
 // Compare password
-serviceProviderSchema.methods.comparePassword = async function(enteredPassword) {
+serviceProviderSchema.methods.comparePassword = async function (enteredPassword) {
   return await bcrypt.compare(enteredPassword, this.password);
 };
 
 // Generate OTP
-serviceProviderSchema.methods.generateOTP = function() {
+serviceProviderSchema.methods.generateOTP = function () {
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
   this.otp = {
     code: otp,
@@ -260,7 +239,7 @@ serviceProviderSchema.methods.generateOTP = function() {
 };
 
 // Verify OTP
-serviceProviderSchema.methods.verifyOTP = function(enteredOTP) {
+serviceProviderSchema.methods.verifyOTP = function (enteredOTP) {
   if (!this.otp || !this.otp.code || this.otp.expiresAt < new Date() || this.otp.attempts >= 5) {
     return false;
   }

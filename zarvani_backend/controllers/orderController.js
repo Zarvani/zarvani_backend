@@ -3,8 +3,7 @@ const Shop = require('../models/Shop');
 const Product = require('../models/Product');
 const User = require('../models/User');
 const ResponseHandler = require('../utils/responseHandler');
-const GeoService = require('../services/geoService');
-const PushNotificationService = require('../services/pushNotification');
+const OrderService = require('../services/orderService');
 const logger = require('../utils/logger');
 const mongoose = require('mongoose');
 
@@ -38,201 +37,23 @@ const calculateDeliveryFee = (shop, distance, orderAmount) => {
 
 // ==================== USER ORDER FLOW ====================
 
+// 1. Create New Order
 exports.createOrder = async (req, res) => {
-  const session = await mongoose.startSession();
-
   try {
-    session.startTransaction();
-
-    const {
-      shopId,
-      items,
-      deliveryAddressId,
-      deliveryType = 'standard',
-      deliverySlot,
-      deliveryInstructions,
-      paymentMethod,
-      couponCode,
-      tip = 0,
-      notes
-    } = req.body;
-
-    const userId = req.user._id;
-
-    // Fetch user
-    const user = await User.findById(userId).session(session);
-    if (!user) throw new Error('User not found');
-
-    const deliveryAddress = user.addresses.id(deliveryAddressId);
-    if (!deliveryAddress) throw new Error('Delivery address not found');
-
-    // Fetch shop
-    const shop = await Shop.findById(shopId).session(session);
-    if (!shop || !shop.isActive || !shop.isOpen) throw new Error('Shop is not available');
-    if (!shop.isShopOpenNow()) throw new Error('Shop is currently closed');
-
-    // Calculate distance
-    const distance = GeoService.calculateDistance(
-      shop.address.location.coordinates[1],
-      shop.address.location.coordinates[0],
-      deliveryAddress.location.coordinates[1],
-      deliveryAddress.location.coordinates[0]
-    );
-
-    if (distance > shop.deliverySettings.radius) throw new Error('Delivery not available at this location');
-
-    // Validate items and calculate totals
-    let itemsTotal = 0;
-    let savings = 0;
-    const orderItems = [];
-
-    for (const item of items) {
-      const product = await Product.findById(item.productId).session(session);
-      if (!product || !product.isAvailable) throw new Error(`Product ${item.name || item.productId} not available`);
-      if (product.shop.toString() !== shopId.toString()) throw new Error(`Product ${product.name} doesn't belong to this shop`);
-      if (product.stock.quantity < item.quantity) throw new Error(`Insufficient stock for ${product.name}`);
-
-      const itemTotal = product.price.sellingPrice * item.quantity;
-      const itemSavings = (product.price.mrp - product.price.sellingPrice) * item.quantity;
-
-      itemsTotal += itemTotal;
-      savings += itemSavings;
-
-      orderItems.push({
-        product: product._id,
-        name: product.name,
-        image: product.images[0]?.url,
-        quantity: item.quantity,
-        price: {
-          mrp: product.price.mrp,
-          sellingPrice: product.price.sellingPrice,
-          discount: product.price.discount
-        },
-        total: itemTotal,
-        weight: product.weight,
-        variant: item.variant,
-        addons: item.addons || []
-      });
-    }
-
-    if (itemsTotal < shop.deliverySettings.minOrderAmount) {
-      throw new Error(`Minimum order amount is ₹${shop.deliverySettings.minOrderAmount}`);
-    }
-
-    const deliveryFee = calculateDeliveryFee(shop, distance, itemsTotal);
-    const packagingCharge = shop.deliverySettings.packagingCharge || 0;
-    const tax = Math.round(itemsTotal * 0.05); // 5% GST
-    const discountAmount = couponCode ? Math.min(50, itemsTotal * 0.1) : 0; // example
-    const subtotal = itemsTotal + deliveryFee + packagingCharge + tax - discountAmount + tip;
-    const totalAmount = subtotal;
-
-    const orderId = generateOrderId();
-
-    // Create order object
-    const order = new Order({
-      orderId,
-      user: userId,
-      shop: shopId,
-      items: orderItems,
-      deliveryAddress: deliveryAddress.toObject(),
-      deliveryInfo: {
-        type: deliveryType,
-        slot: deliverySlot,
-        instructions: deliveryInstructions,
-        contactless: true,
-        otp: { code: Math.floor(1000 + Math.random() * 9000).toString(), verified: false }
-      },
-      status: 'pending',
-      timestamps: { placedAt: new Date() },
-      pricing: {
-        itemsTotal,
-        tax,
-        deliveryFee,
-        packagingCharge,
-        tip,
-        discount: { couponCode, amount: discountAmount, type: 'fixed' },
-        subtotal,
-        totalAmount,
-        savings
-      },
-      payment: { method: paymentMethod, status: paymentMethod === 'cod' ? 'pending' : 'paid' },
-      customerInfo: { name: user.name, phone: user.phone, email: user.email },
-      shopInfo: {
-        name: shop.name,
-        phone: shop.phone,
-        address: shop.address.formattedAddress || `${shop.address.addressLine1}, ${shop.address.city}`,
-        location: shop.address.location
-      },
-      tracking: {
-        shopLocation: shop.address.location,
-        userLocation: deliveryAddress.location,
-        distance: { shopToUser: distance }
-      },
-      notes,
-      source: req.headers['x-platform'] || 'app',
-      deviceInfo: {
-        platform: req.headers['x-device-platform'] || 'unknown',
-        version: req.headers['x-app-version'] || '1.0.0'
-      }
-    });
-
-    // Reduce product stock
-    for (const item of items) {
-      await Product.findByIdAndUpdate(
-        item.productId,
-        { $inc: { 'stock.quantity': -item.quantity } },
-        { session }
-      );
-    }
-
-    // Update shop stats
-    await Shop.findByIdAndUpdate(
-      shopId,
-      {
-        $inc: {
-          'orderStats.total': 1,
-          'orderStats.today': 1,
-          'orderStats.pending': 1,
-          'earnings.today': totalAmount,
-          'earnings.weekly': totalAmount,
-          'earnings.monthly': totalAmount,
-          'earnings.total': totalAmount,
-          'earnings.pending': paymentMethod === 'cod' ? totalAmount : 0
+    const order = await OrderService.createOrder({
+      userId: req.user._id,
+      body: req.body,
+      platformInfo: {
+        platform: req.headers['x-platform'] || 'app',
+        device: {
+          platform: req.headers['x-device-platform'] || 'unknown',
+          version: req.headers['x-app-version'] || '1.0.0'
         }
-      },
-      { session }
-    );
+      }
+    }, req.app);
 
-    await order.save({ session });
-
-    // Commit transaction
-    await session.commitTransaction();
-    session.endSession();
-
-    // Populate for response
-    const populatedOrder = await Order.findById(order._id)
-      .populate('shop', 'name logo phone address')
-      .populate('user', 'name phone');
-
-    // Send push notification (outside transaction)
-    PushNotificationService.sendToShop(
-      shopId,
-      'New Order Received',
-      `Order #${orderId} - ₹${totalAmount}`,
-      { orderId: order._id, type: 'new_order' }
-    ).catch(err => logger.error(err));
-
-    ResponseHandler.success(
-      res,
-      { order: populatedOrder },
-      'Order placed successfully. Waiting for shop confirmation.',
-      201
-    );
-
+    ResponseHandler.success(res, { order }, 'Order placed successfully', 201);
   } catch (error) {
-    try { await session.abortTransaction(); } catch { }
-    session.endSession();
-
     logger.error(`Create order error: ${error.message}`);
     ResponseHandler.error(res, error.message, 400);
   }
@@ -241,300 +62,37 @@ exports.createOrder = async (req, res) => {
 
 // 2. Shop Accepts Order
 exports.acceptOrder = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
-  let committed = false;
-
   try {
-    const { orderId } = req.params;
-    const shopId = req.user._id;
-
-    const order = await Order.findOne({
-      _id: orderId,
-      shop: shopId,
-      status: 'pending'
-    }).session(session);
-
-    if (!order) {
-      await session.abortTransaction();
-      return ResponseHandler.error(res, 'Order not found or already processed', 404);
-    }
-
-    // Assign delivery boy
-    const shop = await Shop.findById(shopId).session(session);
-    const deliveryBoy = await shop.assignDeliveryBoy(orderId);
-
-    if (!deliveryBoy) {
-      await session.abortTransaction();
-      return ResponseHandler.error(res, 'No delivery boy available', 400);
-    }
-
-    // Update order
-    order.status = 'confirmed';
-    order.deliveryBoy = deliveryBoy._id;
-    order.timestamps.confirmedAt = new Date();
-    order._updatedBy = 'shop';
-
-    // Update stats
-    await Shop.findByIdAndUpdate(
-      shopId,
-      {
-        $inc: {
-          'orderStats.pending': -1,
-          'orderStats.preparing': 1
-        }
-      },
-      { session }
-    );
-
-    await order.save({ session });
-
-    await session.commitTransaction();
-    committed = true;
-
+    const order = await OrderService.acceptOrder(req.params.orderId, req.user._id, req.app);
+    ResponseHandler.success(res, { order }, 'Order accepted successfully');
   } catch (error) {
-
-    if (!committed) {
-      // Only abort if not already committed
-      await session.abortTransaction();
-    }
-
     logger.error(`Accept order error: ${error.message}`);
-    return ResponseHandler.error(res, error.message, 500);
-
-  } finally {
-    session.endSession();
-  }
-
-  // ------------------------------
-  // 🚀 POST-COMMIT OPERATIONS
-  // ------------------------------
-  try {
-    // Now safe to send notifications
-    const order = await Order.findById(req.params.orderId)
-      .populate('shop', 'name logo phone')
-      .populate('deliveryBoy', 'name phone vehicle');
-
-    await PushNotificationService.sendToUser(
-      order.user,
-      'Order Confirmed',
-      `Your order #${order.orderId} has been confirmed and will be ready soon.`
-    );
-
-    await PushNotificationService.sendToDeliveryPerson(
-      order.deliveryBoy._id,
-      order.shop._id,
-      'New Delivery Assignment',
-      `Pickup order #${order.orderId} from ${order.shop.name}`,
-      {
-        orderId: order._id,
-        shopId: order.shop._id,
-        shopName: order.shop.name,
-        shopAddress: order.shop.address.formattedAddress,
-        shopLocation: order.shop.address.location.coordinates
-      }
-    );
-
-    return ResponseHandler.success(res, { order }, 'Order accepted successfully');
-
-  } catch (notifyError) {
-    logger.error("Notification error (no transaction rollback needed): " + notifyError.message);
-    return ResponseHandler.success(
-      res,
-      { orderId: req.params.orderId },
-      "Order accepted, but notifications failed"
-    );
+    ResponseHandler.error(res, error.message, 500);
   }
 };
 
 // 3. Shop Rejects Order
+// 3. Shop Rejects Order
 exports.rejectOrder = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
   try {
-    const { orderId } = req.params;
-    const { reason } = req.body;
-    const shopId = req.user._id;
-
-    const order = await Order.findOne({
-      _id: orderId,
-      shop: shopId,
-      status: 'pending'
-    }).session(session);
-
-    if (!order) {
-      await session.abortTransaction();
-      return ResponseHandler.error(res, 'Order not found or already processed', 404);
-    }
-
-    // Restore product stock
-    for (const item of order.items) {
-      await Product.findByIdAndUpdate(
-        item.product,
-        { $inc: { 'stock.quantity': item.quantity } },
-        { session }
-      );
-    }
-
-    // Update order
-    order.status = 'rejected';
-    order.rejection = { reason };
-    order.timestamps.rejectedAt = new Date();
-    order._updatedBy = 'shop';
-
-    // Update shop stats
-    await Shop.findByIdAndUpdate(
-      shopId,
-      {
-        $inc: {
-          'orderStats.pending': -1,
-          'orderStats.cancelled': 1
-        }
-      },
-      { session }
-    );
-
-    await order.save({ session });
-    await session.commitTransaction();
-
-    // Refund payment if online
-    if (order.payment.method !== 'cod' && order.payment.status === 'paid') {
-      // Implement refund logic here
-      order.payment.status = 'refunded';
-      order.payment.refundedAt = new Date();
-      await order.save();
-    }
-
-    // Send notification
-    await PushNotificationService.sendToUser(
-      order.user,
-      'Order Rejected',
-      `Shop rejected your order #${order.orderId}. Reason: ${reason}`
-    );
-
-    ResponseHandler.success(res, { order }, 'Order rejected');
-
+    const order = await OrderService.rejectOrder(req.params.orderId, req.user._id, req.body.reason, req.app);
+    ResponseHandler.success(res, { order }, 'Order rejected successfully');
   } catch (error) {
-    await session.abortTransaction();
     logger.error(`Reject order error: ${error.message}`);
     ResponseHandler.error(res, error.message, 500);
-  } finally {
-    session.endSession();
   }
 };
 
 // 4. Update Order Status (Shop: Preparing, Ready, Packed, etc.)
 
+// 4. Update Order Status
 exports.updateOrderStatus = async (req, res) => {
   try {
-    const { orderId } = req.params;
-    const { status } = req.body;
-    const shopId = req.user._id;
-
-    // Valid statuses allowed for shop
-    const validStatuses = ['confirmed', 'preparing', 'ready', 'packed', 'out_for_delivery'];
-    if (!validStatuses.includes(status)) {
-      return ResponseHandler.error(res, 'Invalid status update', 400);
-    }
-
-    // Find order
-    const order = await Order.findOne({ _id: orderId, shop: shopId });
-    if (!order) {
-      return ResponseHandler.error(res, 'Order not found', 404);
-    }
-
-    // Status transition rules
-    const statusOrder = {
-      'pending': ['confirmed', 'rejected', 'cancelled'],
-      'confirmed': ['preparing', 'cancelled'],
-      'preparing': ['ready', 'cancelled'],
-      'ready': ['packed', 'cancelled'],
-      'packed': ['out_for_delivery', 'cancelled'],
-      'out_for_delivery': ['delivered', 'cancelled'],
-      'arriving': ['delivered', 'cancelled'],
-      'delivered': [],
-      'cancelled': [],
-      'rejected': []
-    };
-
-    const allowedTransitions = statusOrder[order.status] || [];
-    if (!allowedTransitions.includes(status)) {
-      return ResponseHandler.error(
-        res,
-        `Cannot transition from ${order.status} to ${status}`,
-        400
-      );
-    }
-
-    // Update status
-    const oldStatus = order.status;
-    order.status = status;
-    order._updatedBy = 'shop';
-
-    // Timestamps mapping
-    const timestampMap = {
-      'confirmed': 'confirmedAt',
-      'preparing': 'preparingAt',
-      'ready': 'readyAt',
-      'packed': 'packedAt',
-      'out_for_delivery': 'outForDeliveryAt',
-      'delivered': 'deliveredAt'
-    };
-
-    if (timestampMap[status]) {
-      order.timestamps[timestampMap[status]] = new Date();
-    }
-
-    // Update shop stats
-    await Shop.findByIdAndUpdate(shopId, {
-      $inc: {
-        [`orderStats.${oldStatus}`]: -1,
-        [`orderStats.${status}`]: 1
-      }
-    });
-
-    // **IMPORTANT FIX**
-    // prevent deliveryAddress validation error
-    await order.save({ validateBeforeSave: false });
-
-    // Notifications
-    const statusMessages = {
-      'confirmed': 'Your order has been accepted by the shop',
-      'preparing': 'Your order is being prepared',
-      'ready': 'Your order is ready for pickup',
-      'packed': 'Your order has been packed',
-      'out_for_delivery': 'Your order is out for delivery'
-    };
-
-    if (statusMessages[status]) {
-      await PushNotificationService.sendToUser(
-        order.user,
-        'Order Status Update',
-        statusMessages[status]
-      );
-    }
-
-    // Notify delivery boy when ready for pickup
-    if (status === 'ready' && order.deliveryBoy) {
-      await PushNotificationService.sendToDeliveryPerson(
-        order.deliveryBoy,
-        shopId,
-        'Order Ready for Pickup',
-        `Order #${order.orderId} is ready for pickup`,
-        {
-          orderId: order._id,
-          pickupReady: true
-        }
-      );
-    }
-
-    return ResponseHandler.success(res, { order }, `Order status updated to ${status}`);
-
+    const order = await OrderService.updateStatus(req.params.orderId, req.user._id, req.body.status, req.app);
+    ResponseHandler.success(res, { order }, `Order status updated to ${req.body.status}`);
   } catch (error) {
-    logger.error(`Update order status error: ${error.message}`);
-    return ResponseHandler.error(res, error.message, 500);
+    logger.error(`Update status error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
   }
 };
 
@@ -746,7 +304,7 @@ exports.markDelivered = async (req, res) => {
         $inc: {
           'orderStats.totalOrders': 1,
           'orderStats.totalSpent': order.pricing.totalAmount,
-          'loyalty.points': Math.floor(order.pricing.totalAmount / 10) // 1 point per ₹10
+          'loyaltyPoints': Math.floor(order.pricing.totalAmount / 10) // 1 point per ₹10
         }
       },
       { session }

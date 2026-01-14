@@ -2,13 +2,13 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const User = require('../models/User');
 const ServiceProvider = require('../models/ServiceProvider');
-const Shop  = require('../models/Shop');
+const Shop = require('../models/Shop');
 const { Admin } = require('../models/Admin');
 const EmailService = require('../services/emailService');
 const ResponseHandler = require('../utils/responseHandler');
 const getAddressFromCoords = require('../utils/getAddressFromCoords')
 const logger = require('../utils/logger');
-const redisClient =require("../config/passport")
+const redisClient = require("../config/passport")
 // Generate JWT Token
 const generateToken = (id, role) => {
   return jwt.sign({ id, role }, process.env.JWT_SECRET, {
@@ -41,12 +41,12 @@ exports.sendSignupOTP = async (req, res) => {
     // Store OTP in Redis for 10 min
     await redisClient.setEx(`otp:signup:${identifier}`, 600, otp);
 
-    console.log("Signup OTP:", otp);
+    // OTP logging removed for security
 
     if (isEmail) {
       await EmailService.sendOTP(identifier, otp, "New User");
     } else {
-      console.log("SMS OTP:", otp);
+      // OTP logging removed for security
     }
 
     return ResponseHandler.success(
@@ -65,36 +65,36 @@ exports.sendSignupOTP = async (req, res) => {
 exports.sendOTP = async (req, res) => {
   try {
     const { identifier, role = 'user' } = req.body; // identifier can be email or phone
-    
+
     let Model;
     if (role === 'user') Model = User;
     else if (role === 'provider') Model = ServiceProvider;
     else if (role === 'shop') Model = Shop;
     else return ResponseHandler.error(res, 'Invalid role', 400);
-    
+
     // Check if identifier is email or phone
     const isEmail = /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/.test(identifier);
     const query = isEmail ? { email: identifier } : { phone: identifier };
-    
+
     let user = await Model.findOne(query);
-    
+
     if (!user) {
       return ResponseHandler.error(res, 'User not found. Please sign up first.', 404);
     }
-    
+
     // Generate and save OTP
     const otp = user.generateOTP();
     await user.save();
-    
+
     // Send OTP via email or SMS
     if (isEmail) {
       await EmailService.sendOTP(identifier, otp, user.name);
     } else {
       // TODO: Implement SMS service
-      console.log(`OTP for ${identifier}: ${otp}`);
+      // OTP logging removed for security
     }
-    
-    ResponseHandler.success(res, 
+
+    ResponseHandler.success(res,
       { message: `OTP sent to ${isEmail ? 'email' : 'phone'}` },
       'OTP sent successfully'
     );
@@ -219,7 +219,7 @@ exports.signup = async (req, res) => {
           addressLine2: address.addressLine2 || "",
           city: address.city,
           state: address.state,
-          country:address.country,
+          country: address.country,
           pincode: address.pincode,
           location: {
             type: "Point",
@@ -265,7 +265,7 @@ exports.signup = async (req, res) => {
           addressLine2: address.addressLine2 || "",
           city: address.city,
           state: address.state,
-          country:address.country,
+          country: address.country,
           pincode: address.pincode,
           location: {
             type: "Point",
@@ -337,12 +337,12 @@ exports.signup = async (req, res) => {
 
   } catch (err) {
     logger.error(`Signup error: ${err.message}`);
-    
+
     // Delete uploaded files if registration fails
     if (req.files) {
       try {
         const { deleteFromCloudinary } = require('../middleware/uploadMiddleware');
-        
+
         if (req.files.idProof && req.files.idProof[0]) {
           await deleteFromCloudinary(req.files.idProof[0].filename);
         }
@@ -356,7 +356,7 @@ exports.signup = async (req, res) => {
         logger.error(`Error deleting files: ${deleteErr.message}`);
       }
     }
-    
+
     return ResponseHandler.error(res, err.message, 500);
   }
 };
@@ -406,53 +406,53 @@ exports.verifySignupOTP = async (req, res) => {
 exports.verifyOTP = async (req, res) => {
   try {
     const { identifier, otp, role = 'user' } = req.body;
-    
+
     let Model;
     if (role === 'user') Model = User;
     else if (role === 'provider') Model = ServiceProvider;
     else if (role === 'shop') Model = Shop;
     else return ResponseHandler.error(res, 'Invalid role', 400);
-    
+
     const isEmail = /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/.test(identifier);
     const query = isEmail ? { email: identifier } : { phone: identifier };
-    
+
     const user = await Model.findOne(query);
-    
+
     if (!user) {
       return ResponseHandler.error(res, 'User not found', 404);
     }
-    
+
     // Verify OTP
     const isValid = user.verifyOTP(otp);
-    
+
     if (!isValid) {
       user.otp.attempts += 1;
       await user.save();
-      
+
       if (user.otp.attempts >= 5) {
         return ResponseHandler.error(res, 'Maximum OTP attempts reached. Please request a new OTP.', 400);
       }
-      
+
       return ResponseHandler.error(res, 'Invalid or expired OTP', 400);
     }
-    
+
     // Mark as verified
     if (isEmail) {
       user.emailVerified = true;
     } else {
       user.phoneVerified = true;
     }
-    
+
     user.otp = undefined;
     await user.save();
-    
+
     // Generate tokens
     const token = generateToken(user._id, role);
     const refreshToken = generateRefreshToken(user._id, role);
-    
+
     // Remove sensitive data
     user.password = undefined;
-    
+
     ResponseHandler.success(res, {
       user,
       token,
@@ -492,9 +492,9 @@ exports.loginWithPassword = async (req, res) => {
       user = await Shop.findOne(query).select("+password");
       if (user) role = "shop";
     }
-   if (!user) {
+    if (!user) {
       user = await Admin.findOne(query).select("+password");
-     if (user) {
+      if (user) {
         if (user.role === "admin" || user.role === "superadmin") {
           role = user.role; // assign actual admin/superadmin role
         } else {
@@ -574,7 +574,7 @@ exports.loginWithOTP = async (req, res) => {
     if (isEmail) {
       await EmailService.sendOTP(identifier, otp, user.name);
     } else {
-      console.log(`OTP for ${identifier}: ${otp}`);
+      // OTP logging removed for security
     }
 
     return ResponseHandler.success(
@@ -655,7 +655,7 @@ exports.verifyloginWithOTP = async (req, res) => {
 
 // Forgot Password
 exports.forgotPassword = async (req, res) => {
- try {
+  try {
     const { identifier, newPassword } = req.body;
 
     if (!identifier || !newPassword) {
@@ -706,31 +706,31 @@ exports.changePassword = async (req, res) => {
     const { currentPassword, newPassword } = req.body;
     const userId = req.user._id;
     const role = req.userRole;
-    
+
     let Model;
     if (role === 'user') Model = User;
     else if (role === 'provider') Model = ServiceProvider;
     else if (role === 'shop') Model = Shop;
     else if (role === 'admin' || role === 'superadmin') Model = Admin;
     else return ResponseHandler.error(res, 'Invalid role', 400);
-    
+
     const user = await Model.findById(userId).select('+password');
-    
+
     if (!user) {
       return ResponseHandler.error(res, 'User not found', 404);
     }
-    
+
     // Verify current password
     const isMatch = await user.comparePassword(currentPassword);
-    
+
     if (!isMatch) {
       return ResponseHandler.error(res, 'Current password is incorrect', 400);
     }
-    
+
     // Set new password
     user.password = newPassword;
     await user.save();
-    
+
     ResponseHandler.success(res, null, 'Password changed successfully');
   } catch (error) {
     logger.error(`Change password error: ${error.message}`);
@@ -742,16 +742,16 @@ exports.changePassword = async (req, res) => {
 exports.refreshToken = async (req, res) => {
   try {
     const { refreshToken } = req.body;
-    
+
     if (!refreshToken) {
       return ResponseHandler.error(res, 'Refresh token required', 400);
     }
-    
+
     const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
-    
+
     // Generate new access token
     const newToken = generateToken(decoded.id, decoded.role);
-    
+
     ResponseHandler.success(res, { token: newToken }, 'Token refreshed successfully');
   } catch (error) {
     logger.error(`Refresh token error: ${error.message}`);
@@ -764,7 +764,7 @@ exports.logout = async (req, res) => {
   try {
     // In a stateless JWT system, logout is handled client-side
     // by removing the token. However, you can implement token blacklisting if needed
-    
+
     ResponseHandler.success(res, null, 'Logged out successfully');
   } catch (error) {
     logger.error(`Logout error: ${error.message}`);
@@ -817,10 +817,10 @@ exports.getCurrentUser = async (req, res) => {
 
     // Convert to plain object
     user = user.toObject ? user.toObject() : user;
-    
+
     // Add role to user object for frontend
     user.role = role;
-    
+
     return ResponseHandler.success(
       res,
       {
