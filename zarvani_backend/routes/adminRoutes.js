@@ -4,7 +4,7 @@ const router = express.Router();
 const adminController = require('../controllers/adminController');
 const { protect, authorize } = require('../middleware/authMiddleware');
 const { uploadImages } = require('../middleware/uploadMiddleware')
-router.get('/createAdmin', adminController.createAdmin);
+router.post('/createAdmin', adminController.createAdmin);
 router.use(protect);
 router.use(authorize('admin', 'superadmin'));
 
@@ -36,11 +36,11 @@ router.get('/analytics/top-services', adminController.getTopServices);
 router.get('/analytics/top-providers', adminController.getTopProviders);
 
 // Service Categories
-router.post('/services',uploadImages, adminController.addService);
+router.post('/services', uploadImages, adminController.addService);
 router.get('/services', adminController.getServices);
 router.get('/services/categories', adminController.getServiceCategories);
 router.get('/services/:id', adminController.getServiceDetails);
-router.put('/services/:id', uploadImages,adminController.updateService);
+router.put('/services/:id', uploadImages, adminController.updateService);
 router.put('/services/:id/toggle-status', adminController.toggleServiceStatus);
 router.delete('/services/:id', adminController.deleteService);
 

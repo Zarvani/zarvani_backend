@@ -6,10 +6,9 @@ const paymentSchema = new mongoose.Schema({
     transactionId: {
         type: String,
         unique: true,
-        required: true,
-        index: true
+        required: true
     },
-    
+
     // References
     booking: {
         type: mongoose.Schema.Types.ObjectId,
@@ -32,81 +31,81 @@ const paymentSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Shop'
     },
-    
+
     amount: {
         type: Number,
         required: true,
         min: 0
     },
-    
+
     // ==================== COMMISSION STRUCTURE ====================
     commission: {
-        companyCommission: { 
-            type: Number, 
+        companyCommission: {
+            type: Number,
             default: 0,
-            min: 0 
+            min: 0
         },
-        providerEarning: { 
-            type: Number, 
+        providerEarning: {
+            type: Number,
             default: 0,
-            min: 0 
+            min: 0
         },
-        shopEarning: { 
-            type: Number, 
+        shopEarning: {
+            type: Number,
             default: 0,
-            min: 0 
+            min: 0
         },
         // Commission rates based on payment destination
-        commissionRate: { 
-            type: Number, 
+        commissionRate: {
+            type: Number,
             default: 15,
             min: 0,
-            max: 100 
+            max: 100
         },
-        pendingCommission: { 
-            type: Number, 
+        pendingCommission: {
+            type: Number,
             default: 0,
-            min: 0 
+            min: 0
         },
-        pendingCommissionRate: { 
-            type: Number, 
+        pendingCommissionRate: {
+            type: Number,
             default: 20, // Default for provider personal payments
             min: 0,
-            max: 100 
+            max: 100
         },
         // Shop commission rates
-        shopCommissionRate: { 
-            type: Number, 
+        shopCommissionRate: {
+            type: Number,
             default: 8,
             min: 0,
-            max: 100 
+            max: 100
         },
-        shopPendingCommissionRate: { 
-            type: Number, 
+        shopPendingCommissionRate: {
+            type: Number,
             default: 12,
             min: 0,
-            max: 100 
+            max: 100
         },
         calculatedAt: {
             type: Date,
             default: Date.now
         }
     },
-    
+
     // ==================== PAYMENT DESTINATION ====================
     paymentDestination: {
         type: String,
         enum: ['company_account', 'personal_account'],
         required: true
     },
-    
+
     // ==================== PAYMENT TYPE ====================
     paymentType: {
         type: String,
         enum: ['service', 'product_order'],
         required: true
     },
-    
+
     // ==================== QR PAYMENT DETAILS ====================
     qrPayment: {
         qrCode: String,
@@ -128,7 +127,7 @@ const paymentSchema = new mongoose.Schema({
             default: false
         }
     },
-    
+
     // ==================== UPI PAYMENT GATEWAY DETAILS ====================
     upiPayment: {
         upiId: String,
@@ -143,7 +142,7 @@ const paymentSchema = new mongoose.Schema({
             default: 'webhook'
         }
     },
-    
+
     // ==================== BANK TRANSFER DETAILS ====================
     bankTransfer: {
         bankName: String,
@@ -162,7 +161,7 @@ const paymentSchema = new mongoose.Schema({
         },
         verifiedAt: Date
     },
-    
+
     // ==================== PAYMENT VERIFICATION ====================
     paymentVerification: {
         status: {
@@ -187,13 +186,13 @@ const paymentSchema = new mongoose.Schema({
         },
         notes: String
     },
-    
+
     // ==================== PENDING COMMISSION TRACKING ====================
     pendingCommission: {
-        amount: { 
-            type: Number, 
+        amount: {
+            type: Number,
             default: 0,
-            min: 0 
+            min: 0
         },
         status: {
             type: String,
@@ -202,7 +201,7 @@ const paymentSchema = new mongoose.Schema({
         },
         dueDate: {
             type: Date,
-            required: function() {
+            required: function () {
                 return this.paymentDestination === 'personal_account';
             }
         },
@@ -222,7 +221,7 @@ const paymentSchema = new mongoose.Schema({
             content: String
         }]
     },
-    
+
     // ==================== PAYOUT TRACKING ====================
     payout: {
         status: {
@@ -245,7 +244,7 @@ const paymentSchema = new mongoose.Schema({
         lastRetryAt: Date,
         transactionId: String
     },
-    
+
     // ==================== AUTO PAYOUT DETAILS ====================
     autoPayout: {
         status: {
@@ -261,7 +260,7 @@ const paymentSchema = new mongoose.Schema({
         retryCount: { type: Number, default: 0 },
         lastRetryAt: Date
     },
-    
+
     // ==================== PAYOUT DETAILS ====================
     payoutDetails: {
         providerAmount: Number,      // Amount sent to provider
@@ -270,33 +269,33 @@ const paymentSchema = new mongoose.Schema({
         sentAt: Date,
         transactionId: String
     },
-    
+
     // ==================== PAYMENT DETAILS ====================
     paymentMethod: {
         type: String,
         enum: ['online', 'cash', 'cod', 'upi', 'card', 'netbanking', 'wallet', 'qr'],
         required: true
     },
-    
+
     // ==================== PAYMENT GATEWAY ====================
     paymentGateway: {
         type: String,
         enum: ['razorpay', 'paytm', 'phonepe', 'google_pay', 'manual'],
         default: 'razorpay'
     },
-    
+
     gatewayTransactionId: String,
     gatewayResponse: mongoose.Schema.Types.Mixed,
-    
+
     // ==================== PAYMENT STATUS ====================
     status: {
         type: String,
         enum: ['pending', 'success', 'failed', 'refunded', 'cancelled', 'expired'],
         default: 'pending'
     },
-    
+
     paymentDate: Date,
-    
+
     // ==================== REFUND DETAILS ====================
     refund: {
         amount: { type: Number, min: 0 },
@@ -309,7 +308,7 @@ const paymentSchema = new mongoose.Schema({
             default: 'pending'
         }
     },
-    
+
     // ==================== SECURITY AND VERIFICATION ====================
     ipAddress: String,
     userAgent: String,
@@ -317,10 +316,10 @@ const paymentSchema = new mongoose.Schema({
         type: Boolean,
         default: false
     },
-    
+
     // ==================== METADATA ====================
     metadata: mongoose.Schema.Types.Mixed,
-    
+
     // ==================== AUDIT TRAIL ====================
     createdBy: {
         type: mongoose.Schema.Types.ObjectId,
@@ -345,7 +344,6 @@ paymentSchema.index({ 'upiPayment.transactionId': 1 }, { unique: true, sparse: t
 paymentSchema.index({ shop: 1, status: 1 });
 paymentSchema.index({ 'pendingCommission.status': 1, 'pendingCommission.dueDate': 1 });
 paymentSchema.index({ 'payout.status': 1 });
-paymentSchema.index({ transactionId: 1 });
 paymentSchema.index({ 'qrPayment.status': 1 });
 paymentSchema.index({ 'paymentVerification.status': 1 });
 paymentSchema.index({ paymentDestination: 1, status: 1 });
@@ -354,8 +352,8 @@ paymentSchema.index({ 'commission.pendingCommission': 1 });
 paymentSchema.index({ 'autoPayout.status': 1 });
 
 // ==================== VIRTUALS ====================
-paymentSchema.virtual('isOverdue').get(function() {
-    if (this.paymentDestination === 'personal_account' && 
+paymentSchema.virtual('isOverdue').get(function () {
+    if (this.paymentDestination === 'personal_account' &&
         this.pendingCommission.status === 'pending' &&
         this.pendingCommission.dueDate) {
         return new Date() > this.pendingCommission.dueDate;
@@ -363,7 +361,7 @@ paymentSchema.virtual('isOverdue').get(function() {
     return false;
 });
 
-paymentSchema.virtual('daysOverdue').get(function() {
+paymentSchema.virtual('daysOverdue').get(function () {
     if (this.isOverdue && this.pendingCommission.dueDate) {
         const today = new Date();
         const dueDate = this.pendingCommission.dueDate;
@@ -373,7 +371,7 @@ paymentSchema.virtual('daysOverdue').get(function() {
     return 0;
 });
 
-paymentSchema.virtual('totalCommission').get(function() {
+paymentSchema.virtual('totalCommission').get(function () {
     if (this.paymentDestination === 'company_account') {
         return this.commission.companyCommission;
     } else {
@@ -381,7 +379,7 @@ paymentSchema.virtual('totalCommission').get(function() {
     }
 });
 
-paymentSchema.virtual('netEarning').get(function() {
+paymentSchema.virtual('netEarning').get(function () {
     if (this.paymentDestination === 'company_account') {
         return this.commission.providerEarning || this.commission.shopEarning;
     } else {
@@ -390,33 +388,33 @@ paymentSchema.virtual('netEarning').get(function() {
 });
 
 // ==================== PRE-SAVE MIDDLEWARE ====================
-paymentSchema.pre('save', async function(next) {
+paymentSchema.pre('save', async function (next) {
     // Auto-generate transactionId if not provided
     if (!this.transactionId) {
         this.transactionId = `TXN-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     }
-    
+
     // Set payment type based on provider/shop
     if (this.provider && !this.paymentType) {
         this.paymentType = 'service';
     } else if (this.shop && !this.paymentType) {
         this.paymentType = 'product_order';
     }
-    
+
     // Set commission rates based on payment type and destination
     if (this.isModified('paymentDestination') || this.isModified('paymentType')) {
         await this.calculateCommission();
     }
-    
+
     // Update pending commission status
-    if (this.isModified('pendingCommission.status') && 
-        this.pendingCommission.status === 'paid' && 
+    if (this.isModified('pendingCommission.status') &&
+        this.pendingCommission.status === 'paid' &&
         !this.pendingCommission.paidDate) {
         this.pendingCommission.paidDate = new Date();
         this.paymentVerification.status = 'verified';
         this.paymentVerification.verifiedAt = new Date();
     }
-    
+
     // Mark as overdue if due date passed
     if (this.paymentDestination === 'personal_account' &&
         this.pendingCommission.status === 'pending' &&
@@ -424,7 +422,7 @@ paymentSchema.pre('save', async function(next) {
         new Date() > this.pendingCommission.dueDate) {
         this.pendingCommission.status = 'overdue';
     }
-    
+
     next();
 });
 
@@ -433,7 +431,7 @@ paymentSchema.pre('save', async function(next) {
 /**
  * Calculate commission based on payment destination and type
  */
-paymentSchema.methods.calculateCommission = async function() {
+paymentSchema.methods.calculateCommission = async function () {
     if (this.paymentDestination === 'company_account') {
         // Company account - auto split
         if (this.paymentType === 'service') {
@@ -460,22 +458,22 @@ paymentSchema.methods.calculateCommission = async function() {
             this.commission.pendingCommission = this.amount * 0.12;
             this.commission.shopEarning = this.amount; // Full amount to shop
         }
-        
+
         // Set commission due date (7 days from payment)
         if (!this.pendingCommission.dueDate) {
             this.pendingCommission.dueDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
         }
     }
-    
+
     this.commission.calculatedAt = new Date();
 };
 
 /**
  * Generate QR Code with proper UPI data
  */
-paymentSchema.methods.generateQRCode = async function() {
+paymentSchema.methods.generateQRCode = async function () {
     let upiId, upiName;
-    
+
     if (this.paymentDestination === 'company_account') {
         // Company QR - using company UPI
         upiId = process.env.COMPANY_UPI_ID || 'company@razorpay';
@@ -487,26 +485,26 @@ paymentSchema.methods.generateQRCode = async function() {
         if (!owner) {
             throw new Error('Payment owner not found');
         }
-        
+
         upiId = owner.upiId || owner.bankDetails?.upiId;
         if (!upiId) {
             throw new Error('Owner UPI ID not configured');
         }
-        
+
         upiName = owner.name || owner.businessName;
         this.qrPayment.isCompanyQR = false;
     }
-    
+
     // Store UPI details
     this.qrPayment.upiId = upiId;
     this.qrPayment.upiName = upiName;
     this.qrPayment.amount = this.amount;
     this.qrPayment.expiresAt = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
-    
+
     // Generate UPI deep link
     const upiDeepLink = this.generateUPIDeepLink(upiId, upiName, this.amount);
     this.qrPayment.upiDeepLink = upiDeepLink;
-    
+
     // Generate QR code
     try {
         this.qrPayment.qrImageUrl = await QRCode.toDataURL(upiDeepLink);
@@ -520,22 +518,22 @@ paymentSchema.methods.generateQRCode = async function() {
 /**
  * Generate UPI Deep Link
  */
-paymentSchema.methods.generateUPIDeepLink = function(upiId, name, amount) {
-    const transactionNote = this.booking ? 
-        `Payment for booking ${this.booking.bookingId}` : 
+paymentSchema.methods.generateUPIDeepLink = function (upiId, name, amount) {
+    const transactionNote = this.booking ?
+        `Payment for booking ${this.booking.bookingId}` :
         `Payment for order ${this.order.orderId}`;
-    
+
     return `upi://pay?pa=${upiId}&pn=${encodeURIComponent(name)}&am=${amount}&cu=INR&tn=${encodeURIComponent(transactionNote)}&tr=${this.transactionId}`;
 };
 
 /**
  * Process payment success
  */
-paymentSchema.methods.processPaymentSuccess = async function(upiTransactionId, verifiedAt) {
+paymentSchema.methods.processPaymentSuccess = async function (upiTransactionId, verifiedAt) {
     this.status = 'success';
     this.paymentDate = verifiedAt || new Date();
     this.verified = true;
-    
+
     // Store UPI transaction details
     this.upiPayment = {
         transactionId: upiTransactionId,
@@ -543,10 +541,10 @@ paymentSchema.methods.processPaymentSuccess = async function(upiTransactionId, v
         verifiedAt: this.paymentDate,
         verificationMethod: 'webhook'
     };
-    
+
     // Mark QR as paid
     this.qrPayment.status = 'paid';
-    
+
     await this.save();
     return this;
 };
@@ -554,24 +552,24 @@ paymentSchema.methods.processPaymentSuccess = async function(upiTransactionId, v
 /**
  * Mark commission as paid
  */
-paymentSchema.methods.markCommissionPaid = async function(adminId, paymentMethod, transactionId) {
+paymentSchema.methods.markCommissionPaid = async function (adminId, paymentMethod, transactionId) {
     if (this.paymentDestination !== 'personal_account') {
         throw new Error('Only personal account payments have pending commission');
     }
-    
+
     this.pendingCommission.status = 'paid';
     this.pendingCommission.paidDate = new Date();
     this.pendingCommission.paymentMethod = paymentMethod;
     this.pendingCommission.transactionId = transactionId;
-    
+
     this.paymentVerification.status = 'verified';
     this.paymentVerification.verifiedAt = new Date();
     this.paymentVerification.verifiedBy = adminId;
-    
+
     // Move pending commission to company commission
     this.commission.companyCommission = this.commission.pendingCommission;
     this.commission.pendingCommission = 0;
-    
+
     await this.save();
     return this;
 };
@@ -579,14 +577,14 @@ paymentSchema.methods.markCommissionPaid = async function(adminId, paymentMethod
 /**
  * Check if QR is expired
  */
-paymentSchema.methods.isQRExpired = function() {
+paymentSchema.methods.isQRExpired = function () {
     return this.qrPayment.expiresAt && new Date() > this.qrPayment.expiresAt;
 };
 
 /**
  * Get payment owner details
  */
-paymentSchema.methods.getPaymentOwner = async function() {
+paymentSchema.methods.getPaymentOwner = async function () {
     if (this.provider) {
         return await mongoose.model('ServiceProvider').findById(this.provider);
     } else if (this.shop) {
@@ -598,7 +596,7 @@ paymentSchema.methods.getPaymentOwner = async function() {
 /**
  * Get payment owner type
  */
-paymentSchema.methods.getOwnerType = function() {
+paymentSchema.methods.getOwnerType = function () {
     if (this.provider) return 'provider';
     if (this.shop) return 'shop';
     return null;
@@ -607,16 +605,16 @@ paymentSchema.methods.getOwnerType = function() {
 /**
  * Check if can refund
  */
-paymentSchema.methods.canRefund = function() {
-    return this.status === 'success' && 
-           this.paymentDate && 
-           new Date(this.paymentDate) > new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+paymentSchema.methods.canRefund = function () {
+    return this.status === 'success' &&
+        this.paymentDate &&
+        new Date(this.paymentDate) > new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
 };
 
 /**
  * Calculate refund amount
  */
-paymentSchema.methods.calculateRefundAmount = function(cancellationCharge = 0) {
+paymentSchema.methods.calculateRefundAmount = function (cancellationCharge = 0) {
     return Math.max(0, this.amount - cancellationCharge);
 };
 
@@ -625,10 +623,10 @@ paymentSchema.methods.calculateRefundAmount = function(cancellationCharge = 0) {
 /**
  * Find overdue commissions
  */
-paymentSchema.statics.findOverdueCommissions = function(days = 7) {
+paymentSchema.statics.findOverdueCommissions = function (days = 7) {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - days);
-    
+
     return this.find({
         paymentDestination: 'personal_account',
         'pendingCommission.status': 'pending',
@@ -639,7 +637,7 @@ paymentSchema.statics.findOverdueCommissions = function(days = 7) {
 /**
  * Find pending commissions
  */
-paymentSchema.statics.findPendingCommissions = function() {
+paymentSchema.statics.findPendingCommissions = function () {
     return this.find({
         paymentDestination: 'personal_account',
         'pendingCommission.status': 'pending',

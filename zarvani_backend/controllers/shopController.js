@@ -1,6 +1,6 @@
 // ============= controllers/shopController.js =============
 const Shop = require('../models/Shop');
-const  Product  =require("../models/Product")
+const Product = require("../models/Product")
 const ResponseHandler = require('../utils/responseHandler');
 const { deleteFromCloudinary } = require('../middleware/uploadMiddleware');
 const GeoService = require('../services/geoService');
@@ -20,18 +20,18 @@ exports.getProfile = async (req, res) => {
 // Update Shop Profile
 exports.updateProfile = async (req, res) => {
   try {
-    const { 
-      name, ownerName, email, address, workingHours, categories, 
-      gstNumber, fssaiLicense, bankDetails, deliverySettings, 
-      features, sla, isOpen, ownerPhone 
+    const {
+      name, ownerName, email, address, workingHours, categories,
+      gstNumber, fssaiLicense, bankDetails, deliverySettings,
+      features, sla, isOpen, ownerPhone
     } = req.body;
-    
+
     const updates = {};
-    
+
     // Basic info
     if (name) updates.name = name;
     if (ownerName) updates.ownerName = ownerName;
-    
+
     if (email) {
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (!emailRegex.test(email)) {
@@ -39,18 +39,18 @@ exports.updateProfile = async (req, res) => {
       }
       updates.email = email.toLowerCase();
     }
-    
+
     if (ownerPhone) {
       // Ensure phone starts with +91
       const phone = ownerPhone.startsWith('+91') ? ownerPhone : `+91${ownerPhone}`;
       updates.ownerPhone = phone;
     }
-    
+
     // Parse JSON data
     if (address) {
       const parsedAddress = typeof address === 'string' ? JSON.parse(address) : address;
       updates.address = parsedAddress;
-      
+
       // Geocode address
       if (parsedAddress.addressLine1 && parsedAddress.city) {
         const addressString = [
@@ -62,7 +62,7 @@ exports.updateProfile = async (req, res) => {
           parsedAddress.pincode,
           parsedAddress.country || 'India'
         ].filter(Boolean).join(', ');
-        
+
         try {
           const geoResult = await GeoService.getCoordinatesFromAddress(addressString);
           if (geoResult.success) {
@@ -76,19 +76,19 @@ exports.updateProfile = async (req, res) => {
         }
       }
     }
-    
+
     if (workingHours) {
-      updates.workingHours = typeof workingHours === 'string' 
-        ? JSON.parse(workingHours) 
+      updates.workingHours = typeof workingHours === 'string'
+        ? JSON.parse(workingHours)
         : workingHours;
     }
-    
+
     if (categories) {
-      updates.categories = typeof categories === 'string' 
-        ? JSON.parse(categories) 
+      updates.categories = typeof categories === 'string'
+        ? JSON.parse(categories)
         : categories;
     }
-    
+
     if (gstNumber) {
       // Basic GST validation
       const gstRegex = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
@@ -97,62 +97,62 @@ exports.updateProfile = async (req, res) => {
       }
       updates.gstNumber = gstNumber;
     }
-    
+
     if (fssaiLicense) {
       updates.fssaiLicense = fssaiLicense;
     }
-    
+
     if (bankDetails) {
-      const parsedBankDetails = typeof bankDetails === 'string' 
-        ? JSON.parse(bankDetails) 
+      const parsedBankDetails = typeof bankDetails === 'string'
+        ? JSON.parse(bankDetails)
         : bankDetails;
-      
+
       // Validate bank details
       if (parsedBankDetails.accountNumber && !/^\d{9,18}$/.test(parsedBankDetails.accountNumber)) {
         return ResponseHandler.error(res, "Account number must be 9-18 digits", 400);
       }
-      
+
       if (parsedBankDetails.ifscCode && !/^[A-Z]{4}0[A-Z0-9]{6}$/i.test(parsedBankDetails.ifscCode)) {
         return ResponseHandler.error(res, "Invalid IFSC code format", 400);
       }
-      
+
       // Validate UPI ID format if provided
       if (parsedBankDetails.upiId && !/^[\w.-]+@[\w.-]+$/i.test(parsedBankDetails.upiId)) {
         return ResponseHandler.error(res, "Invalid UPI ID format (e.g., username@upi)", 400);
       }
-      
+
       updates.bankDetails = parsedBankDetails;
     }
-    
+
     if (deliverySettings) {
-      updates.deliverySettings = typeof deliverySettings === 'string' 
-        ? JSON.parse(deliverySettings) 
+      updates.deliverySettings = typeof deliverySettings === 'string'
+        ? JSON.parse(deliverySettings)
         : deliverySettings;
     }
-    
+
     if (features) {
-      updates.features = typeof features === 'string' 
-        ? JSON.parse(features) 
+      updates.features = typeof features === 'string'
+        ? JSON.parse(features)
         : features;
     }
-    
+
     if (sla) {
-      updates.sla = typeof sla === 'string' 
-        ? JSON.parse(sla) 
+      updates.sla = typeof sla === 'string'
+        ? JSON.parse(sla)
         : sla;
     }
-    
+
     if (isOpen !== undefined) {
       updates.isOpen = isOpen === 'true' || isOpen === true;
     }
-    
+
     // Handle logo upload
     if (req.file) {
       try {
         if (req.user.logo?.publicId) {
           await deleteFromCloudinary(req.user.logo.publicId);
         }
-        
+
         updates.logo = {
           url: req.file.path,
           publicId: req.file.filename
@@ -162,37 +162,37 @@ exports.updateProfile = async (req, res) => {
         return ResponseHandler.error(res, "Failed to upload logo", 500);
       }
     }
-    
+
     // Update the shop
     const shop = await Shop.findByIdAndUpdate(
       req.user._id,
       { $set: updates },
-      { 
-        new: true, 
+      {
+        new: true,
         runValidators: true,
         select: '-password -otp -resetPasswordToken -resetPasswordExpire -deliveryBoys.password'
       }
     ).lean();
-    
+
     if (!shop) {
       return ResponseHandler.error(res, "Shop not found", 404);
     }
-    
+
     ResponseHandler.success(res, { shop }, 'Profile updated successfully');
-    
+
   } catch (error) {
     logger.error(`Update shop profile error: ${error.message}`, error);
-    
+
     if (error.name === 'ValidationError') {
       const errors = Object.values(error.errors).map(err => err.message);
       return ResponseHandler.error(res, errors.join(', '), 400);
     }
-    
+
     if (error.code === 11000) {
       const field = Object.keys(error.keyPattern)[0];
       return ResponseHandler.error(res, `${field} already exists`, 400);
     }
-    
+
     ResponseHandler.error(res, "Internal server error", 500);
   }
 };
@@ -201,7 +201,7 @@ exports.updateProfile = async (req, res) => {
 exports.uploadDocuments = async (req, res) => {
   try {
     const shop = await Shop.findById(req.user._id);
-    
+
     if (req.files) {
       if (req.files.businessLicense) {
         if (shop.documents.businessLicense?.publicId) {
@@ -212,7 +212,7 @@ exports.uploadDocuments = async (req, res) => {
           publicId: req.files.businessLicense[0].filename
         };
       }
-      
+
       if (req.files.gstCertificate) {
         if (shop.documents.gstCertificate?.publicId) {
           await deleteFromCloudinary(shop.documents.gstCertificate.publicId);
@@ -223,9 +223,9 @@ exports.uploadDocuments = async (req, res) => {
         };
       }
     }
-    
+
     await shop.save();
-    
+
     ResponseHandler.success(res, { documents: shop.documents }, 'Documents uploaded successfully');
   } catch (error) {
     logger.error(`Upload shop documents error: ${error.message}`);
@@ -236,15 +236,15 @@ exports.uploadDocuments = async (req, res) => {
 exports.addDeliveryBoy = async (req, res) => {
   try {
     const { name, phone, email, password, vehicle } = req.body;
-    
+
     // Check if phone already exists in shop's delivery boys
     const shop = await Shop.findById(req.user._id);
     const existingBoy = shop.deliveryBoys.find(boy => boy.phone === phone);
-    
+
     if (existingBoy) {
       return ResponseHandler.error(res, 'Delivery boy with this phone already exists', 400);
     }
-    
+
     // Create new delivery boy
     const deliveryBoy = {
       name,
@@ -257,14 +257,14 @@ exports.addDeliveryBoy = async (req, res) => {
       createdAt: new Date(),
       updatedAt: new Date()
     };
-    
+
     shop.deliveryBoys.push(deliveryBoy);
     await shop.save();
-    
+
     // Remove password from response
     const addedBoy = shop.deliveryBoys[shop.deliveryBoys.length - 1].toObject();
     delete addedBoy.password;
-    
+
     ResponseHandler.success(res, { deliveryBoy: addedBoy }, 'Delivery boy added successfully', 201);
   } catch (error) {
     logger.error(`Add delivery boy error: ${error.message}`);
@@ -276,22 +276,22 @@ exports.addDeliveryBoy = async (req, res) => {
 exports.getDeliveryBoys = async (req, res) => {
   try {
     const { status } = req.query;
-    
+
     const shop = await Shop.findById(req.user._id);
-    
+
     let deliveryBoys = shop.deliveryBoys;
-    
+
     if (status) {
       deliveryBoys = deliveryBoys.filter(boy => boy.status === status);
     }
-    
+
     // Remove passwords from response
     deliveryBoys = deliveryBoys.map(boy => {
       const boyObj = boy.toObject();
       delete boyObj.password;
       return boyObj;
     });
-    
+
     ResponseHandler.success(res, { deliveryBoys }, 'Delivery boys fetched successfully');
   } catch (error) {
     logger.error(`Get delivery boys error: ${error.message}`);
@@ -303,17 +303,17 @@ exports.getDeliveryBoys = async (req, res) => {
 exports.getDeliveryBoy = async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     const shop = await Shop.findById(req.user._id);
     const deliveryBoy = shop.deliveryBoys.id(id);
-    
+
     if (!deliveryBoy) {
       return ResponseHandler.error(res, 'Delivery boy not found', 404);
     }
-    
+
     const boyObj = deliveryBoy.toObject();
     delete boyObj.password;
-    
+
     ResponseHandler.success(res, { deliveryBoy: boyObj }, 'Delivery boy fetched successfully');
   } catch (error) {
     logger.error(`Get delivery boy error: ${error.message}`);
@@ -326,34 +326,34 @@ exports.updateDeliveryBoy = async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
-    
+
     const shop = await Shop.findById(req.user._id);
     const deliveryBoy = shop.deliveryBoys.id(id);
-    
+
     if (!deliveryBoy) {
       return ResponseHandler.error(res, 'Delivery boy not found', 404);
     }
-    
+
     // Update fields
     if (updates.name) deliveryBoy.name = updates.name;
     if (updates.email) deliveryBoy.email = updates.email;
     if (updates.vehicle) deliveryBoy.vehicle = updates.vehicle;
     if (updates.status) deliveryBoy.status = updates.status;
     if (updates.isActive !== undefined) deliveryBoy.isActive = updates.isActive;
-    
+
     // Handle password update
     if (updates.password) {
       const salt = await bcrypt.genSalt(10);
       deliveryBoy.password = await bcrypt.hash(updates.password, salt);
     }
-    
+
     deliveryBoy.updatedAt = new Date();
-    
+
     await shop.save();
-    
+
     const boyObj = deliveryBoy.toObject();
     delete boyObj.password;
-    
+
     ResponseHandler.success(res, { deliveryBoy: boyObj }, 'Delivery boy updated successfully');
   } catch (error) {
     logger.error(`Update delivery boy error: ${error.message}`);
@@ -365,23 +365,23 @@ exports.updateDeliveryBoy = async (req, res) => {
 exports.deleteDeliveryBoy = async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     const shop = await Shop.findById(req.user._id);
     const deliveryBoy = shop.deliveryBoys.id(id);
-    
+
     if (!deliveryBoy) {
       return ResponseHandler.error(res, 'Delivery boy not found', 404);
     }
-    
+
     // Check if delivery boy has assigned orders
     if (deliveryBoy.assignedOrders && deliveryBoy.assignedOrders.length > 0) {
       return ResponseHandler.error(res, 'Cannot delete delivery boy with assigned orders', 400);
     }
-    
+
     // Remove delivery boy from array
     shop.deliveryBoys.pull(id);
     await shop.save();
-    
+
     ResponseHandler.success(res, null, 'Delivery boy deleted successfully');
   } catch (error) {
     logger.error(`Delete delivery boy error: ${error.message}`);
@@ -394,39 +394,39 @@ exports.uploadDeliveryBoyDocuments = async (req, res) => {
   try {
     const { id } = req.params;
     const { documentType } = req.body; // 'drivingLicense' or 'aadharCard'
-    
+
     if (!req.file) {
       return ResponseHandler.error(res, 'No file uploaded', 400);
     }
-    
+
     if (!['drivingLicense', 'aadharCard'].includes(documentType)) {
       return ResponseHandler.error(res, 'Invalid document type', 400);
     }
-    
+
     const shop = await Shop.findById(req.user._id);
     const deliveryBoy = shop.deliveryBoys.id(id);
-    
+
     if (!deliveryBoy) {
       return ResponseHandler.error(res, 'Delivery boy not found', 404);
     }
-    
+
     // Delete old document if exists
     if (deliveryBoy.documents[documentType]?.publicId) {
       await deleteFromCloudinary(deliveryBoy.documents[documentType].publicId);
     }
-    
+
     // Update document
     deliveryBoy.documents[documentType] = {
       url: req.file.path,
       publicId: req.file.filename,
       verified: false
     };
-    
+
     await shop.save();
-    
+
     ResponseHandler.success(
-      res, 
-      { documents: deliveryBoy.documents }, 
+      res,
+      { documents: deliveryBoy.documents },
       'Document uploaded successfully'
     );
   } catch (error) {
@@ -440,8 +440,7 @@ exports.getDeliveryBoyStats = async (req, res) => {
   try {
     const { id } = req.params;
 
-    console.log("Shop ID from token:", req.user._id);
-    console.log("DeliveryBoy ID from URL:", id);
+    // Debug logs removed for production
 
     const shop = await Shop.findById(req.user._id);
 
@@ -449,7 +448,7 @@ exports.getDeliveryBoyStats = async (req, res) => {
       return ResponseHandler.error(res, "Shop not found", 404);
     }
 
-    console.log("All DBoys:", shop.deliveryBoys.map(b => b._id));
+    // Debug logs removed for production
 
     const deliveryBoy = shop.deliveryBoys.id(id);
 
@@ -482,7 +481,7 @@ exports.getDeliveryBoyStats = async (req, res) => {
 exports.addProduct = async (req, res) => {
   try {
     const { name, description, category, subcategory, price, stock, brand, specifications, tags, sku } = req.body;
-    
+
     const productData = {
       shop: req.user._id,
       name,
@@ -496,16 +495,16 @@ exports.addProduct = async (req, res) => {
       tags: tags ? JSON.parse(tags) : [],
       sku
     };
-    
+
     if (req.files && req.files.length > 0) {
       productData.images = req.files.map(file => ({
         url: file.path,
         publicId: file.filename
       }));
     }
-    
+
     const product = await Product.create(productData);
-    
+
     ResponseHandler.success(res, { product }, 'Product added successfully', 201);
   } catch (error) {
     logger.error(`Add product error: ${error.message}`);
@@ -517,18 +516,18 @@ exports.addProduct = async (req, res) => {
 exports.getMyProducts = async (req, res) => {
   try {
     const { page = 1, limit = 20, search, category } = req.query;
-    
+
     const query = { shop: req.user._id };
     if (search) query.name = { $regex: search, $options: 'i' };
     if (category) query.category = category;
-    
+
     const products = await Product.find(query)
       .limit(limit * 1)
       .skip((page - 1) * limit)
       .sort({ createdAt: -1 });
-    
+
     const count = await Product.countDocuments(query);
-    
+
     ResponseHandler.paginated(res, products, page, limit, count);
   } catch (error) {
     logger.error(`Get shop products error: ${error.message}`);
@@ -541,13 +540,13 @@ exports.updateProduct = async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
-    
+
     const product = await Product.findOne({ _id: id, shop: req.user._id });
-    
+
     if (!product) {
       return ResponseHandler.error(res, 'Product not found', 404);
     }
-    
+
     if (req.files && req.files.length > 0) {
       // Delete old images
       if (product.images && product.images.length > 0) {
@@ -557,16 +556,16 @@ exports.updateProduct = async (req, res) => {
           }
         }
       }
-      
+
       updates.images = req.files.map(file => ({
         url: file.path,
         publicId: file.filename
       }));
     }
-    
+
     Object.assign(product, updates);
     await product.save();
-    
+
     ResponseHandler.success(res, { product }, 'Product updated successfully');
   } catch (error) {
     logger.error(`Update product error: ${error.message}`);
@@ -578,13 +577,13 @@ exports.updateProduct = async (req, res) => {
 exports.deleteProduct = async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     const product = await Product.findOne({ _id: id, shop: req.user._id });
-    
+
     if (!product) {
       return ResponseHandler.error(res, 'Product not found', 404);
     }
-    
+
     // Delete product images from Cloudinary
     if (product.images && product.images.length > 0) {
       for (const img of product.images) {
@@ -593,9 +592,9 @@ exports.deleteProduct = async (req, res) => {
         }
       }
     }
-    
+
     await product.deleteOne();
-    
+
     ResponseHandler.success(res, null, 'Product deleted successfully');
   } catch (error) {
     logger.error(`Delete product error: ${error.message}`);
@@ -608,22 +607,22 @@ exports.getOrders = async (req, res) => {
   try {
     const { page = 1, limit = 20, status } = req.query;
     const Booking = require('../models/Booking');
-    
+
     const query = {
       'products.shop': req.user._id
     };
-    
+
     if (status) query.status = status;
-    
+
     const orders = await Booking.find(query)
       .populate('user')
       .populate('products.product')
       .limit(limit * 1)
       .skip((page - 1) * limit)
       .sort({ createdAt: -1 });
-    
+
     const count = await Booking.countDocuments(query);
-    
+
     ResponseHandler.paginated(res, orders, page, limit, count);
   } catch (error) {
     logger.error(`Get shop orders error: ${error.message}`);
@@ -636,26 +635,26 @@ exports.updateOrderStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
-    const { Booking } = require('../models/Shop');
-    
+    const Booking = require('../models/Booking');
+
     const order = await Booking.findOne({
       _id: id,
       'products.shop': req.user._id
     });
-    
+
     if (!order) {
       return ResponseHandler.error(res, 'Order not found', 404);
     }
-    
+
     // Update product order status
     order.products.forEach(product => {
       if (product.shop.toString() === req.user._id.toString()) {
         product.status = status;
       }
     });
-    
+
     await order.save();
-    
+
     // Send notification to user
     const PushNotificationService = require('../services/pushNotification');
     await PushNotificationService.sendToUser(
@@ -663,7 +662,7 @@ exports.updateOrderStatus = async (req, res) => {
       'Order Status Updated',
       `Your order status has been updated to ${status}`
     );
-    
+
     ResponseHandler.success(res, { order }, 'Order status updated successfully');
   } catch (error) {
     logger.error(`Update order status error: ${error.message}`);

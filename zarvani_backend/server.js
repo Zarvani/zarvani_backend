@@ -6,6 +6,8 @@ const socketIO = require('socket.io');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
+const compression = require('compression');
+const rateLimit = require('express-rate-limit');
 const connectDB = require('./config/db');
 const errorHandler = require('./middleware/errorHandler');
 const logger = require('./utils/logger');
@@ -20,15 +22,23 @@ const bookingRoutes = require('./routes/bookingRoutes');
 const orderRoutes = require('./routes/orderRoutes');
 const productRoutes = require('./routes/productRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
-const cartRoutes=require('./routes/cartRoutes')
-const commission=require('./routes/commissionRoutes')
+const cartRoutes = require('./routes/cartRoutes')
+const commission = require('./routes/commissionRoutes')
 const app = express();
 const server = http.createServer(app);
 
 // Socket.IO setup
+const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : ['*'];
+
 const io = socketIO(server, {
   cors: {
-    origin: "*",
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     credentials: true
   }
@@ -42,8 +52,26 @@ connectDB();
 
 // Middleware
 app.use(helmet());
+app.use(compression());
+
+// Rate Limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
+  message: {
+    success: false,
+    message: 'Too many requests from this IP, please try again after 15 minutes'
+  }
+});
+app.use('/api/', limiter);
 app.use(cors({
-  origin: "*",
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true
 }));
 app.use(express.json({ limit: '10mb' }));
@@ -69,33 +97,33 @@ app.use(`/api/v1/orders`, orderRoutes);
 app.use(`/api/v1/products`, productRoutes);
 app.use(`/api/v1/payments`, paymentRoutes);
 app.use(`/api/v1/cart`, cartRoutes);
-app.use(`/api/v1/commission`,commission);
+app.use(`/api/v1/commission`, commission);
 // Socket.IO connection handling
 io.on('connection', (socket) => {
   logger.info(`Socket connected: ${socket.id}`);
-  
+
   // Join user-specific room
   socket.on('join', (userId) => {
     socket.join(`user_${userId}`);
     logger.info(`User ${userId} joined their room`);
   });
-  
+
   // Join booking room for real-time tracking
   socket.on('join-booking', (bookingId) => {
     socket.join(`booking_${bookingId}`);
     logger.info(`Joined booking room: ${bookingId}`);
   });
-  
+
   // Join order room for real-time tracking
   socket.on('join-order', (orderId) => {
     socket.join(`order_${orderId}`);
     logger.info(`Joined order room: ${orderId}`);
   });
-  
+
   // Provider location update
   socket.on('provider-location-update', (data) => {
     const { bookingId, orderId, latitude, longitude } = data;
-    
+
     if (bookingId) {
       io.to(`booking_${bookingId}`).emit('location-updated', {
         latitude,
@@ -103,7 +131,7 @@ io.on('connection', (socket) => {
         timestamp: new Date()
       });
     }
-    
+
     if (orderId) {
       io.to(`order_${orderId}`).emit('location-updated', {
         latitude,
@@ -112,7 +140,7 @@ io.on('connection', (socket) => {
       });
     }
   });
-  
+
   // Booking status update
   socket.on('booking-status-update', (data) => {
     const { bookingId, status } = data;
@@ -121,7 +149,7 @@ io.on('connection', (socket) => {
       timestamp: new Date()
     });
   });
-  
+
   // Order status update
   socket.on('order-status-update', (data) => {
     const { orderId, status } = data;
@@ -130,7 +158,7 @@ io.on('connection', (socket) => {
       timestamp: new Date()
     });
   });
-  
+
   socket.on('disconnect', () => {
     logger.info(`Socket disconnected: ${socket.id}`);
   });

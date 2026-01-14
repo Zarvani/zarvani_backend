@@ -25,7 +25,7 @@ async function getAddressFromCoords(latitude, longitude) {
       isDefault: true
     };
   } catch (err) {
-    console.log("Reverse geocode error:", err.message);
+    logger.error(`Reverse geocode error: ${err.message}`);
     return null;
   }
 }
