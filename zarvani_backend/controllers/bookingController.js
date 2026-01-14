@@ -1,91 +1,17 @@
-// ============= controllers/bookingController.js (COMPLETE - NO AUTO TIMEOUT) =============
 const Booking = require('../models/Booking');
 const ServiceProvider = require('../models/ServiceProvider');
-const Shop  = require('../models/Shop');
-const  Product  = require('../models/Product');
 const ResponseHandler = require('../utils/responseHandler');
-const GeoService = require('../services/geoService');
-const PushNotificationService = require('../services/pushNotification');
+const BookingService = require('../services/bookingService');
 const logger = require('../utils/logger');
-const { Service } = require("../models/Service");
-const { Notification } = require("../models/Notification");
 const mongoose = require("mongoose");
 
 // ========================== CREATE BOOKING ==========================
 exports.createBooking = async (req, res) => {
   try {
-    const {
-      service,
-      scheduledDate,
-      scheduledTime,
-      isImmediate,
-      address,
-      products,
-      notes,
-      phone
-    } = req.body;
-
-    // Fetch service
-    const serviceData = await Service.findById(service);
-    if (!serviceData) {
-      return ResponseHandler.error(res, 'Service not found', 404);
-    }
-
-    // Convert user address to coordinates
-    if (!address.location.coordinates || address.location.coordinates.length !== 2) {
-      return ResponseHandler.error(res, "Coordinates required", 400);
-    }
-
-    address.location = {
-      type: "Point",
-      coordinates: address.location.coordinates
-    };
-
-    // Total price
-    let totalAmount = serviceData.pricing.discountedPrice || serviceData.pricing.basePrice;
-
-    if (products?.length > 0) {
-      for (const item of products) {
-        const product = await Product.findById(item.product);
-        totalAmount += product.price.sellingPrice * item.quantity;
-      }
-    }
-
-    // Booking ID
-    const bookingId = `BK${Date.now()}${Math.floor(Math.random() * 1000)}`;
-
-    // Create booking - NO AUTO TIMEOUT
-    const booking = await Booking.create({
-      bookingId,
-      user: req.user._id,
-      service,
-      serviceDetails: {
-        title: serviceData.title,
-        price: totalAmount,
-        duration: serviceData.duration.value,
-        category: serviceData.category
-      },
-      scheduledDate: isImmediate ? new Date() : scheduledDate,
-      scheduledTime: isImmediate ? 'Immediate' : scheduledTime,
-      isImmediate: isImmediate || false,
-      address,
-      products,
-      totalAmount,
-      notes,
-      phone: phone || req.user.phone,
-      status: 'searching',
-      providerSearchRadius: 5,
-      maxSearchRadius: 20,
-      searchAttempts: 0,
-      notifiedProviders: [],
-      providerResponseTimeout: 0, // ⚡ NO AUTO TIMEOUT
-      timestamps: {
-        searchingAt: new Date()
-      }
-    });
-
-    // Begin nearby provider search
-    searchAndNotifyProviders(booking);
+    const booking = await BookingService.createBooking({
+      userId: req.user._id,
+      body: req.body
+    }, req.app);
 
     return ResponseHandler.success(
       res,
@@ -93,7 +19,6 @@ exports.createBooking = async (req, res) => {
       'Booking created. Searching for nearby providers...',
       201
     );
-
   } catch (error) {
     logger.error(`Create booking error: ${error.message}`);
     ResponseHandler.error(res, error.message, 500);
@@ -127,9 +52,9 @@ async function searchAndNotifyProviders(booking) {
         booking.providerSearchRadius += 5;
         booking.searchAttempts += 1;
         await booking.save();
-        
+
         logger.info(`Expanding search radius to ${booking.providerSearchRadius}km for booking ${booking.bookingId}`);
-        
+
         // Retry with larger radius after 30 seconds
         setTimeout(() => searchAndNotifyProviders(booking), 30000);
         return;
@@ -143,7 +68,7 @@ async function searchAndNotifyProviders(booking) {
         "No Providers Found",
         "Sorry, no providers are available near your location."
       );
-      
+
       // Create notification for user
       await Notification.create({
         recipient: booking.user,
@@ -157,7 +82,7 @@ async function searchAndNotifyProviders(booking) {
         },
         channels: { push: true, email: true, sms: false }
       });
-      
+
       return;
     }
 
@@ -170,17 +95,17 @@ async function searchAndNotifyProviders(booking) {
           userLocation[1],
           userLocation[0]
         );
-        
+
         // Calculate estimated arrival time
         const estimatedTime = calculateEstimatedTime(distance);
-        
+
         // Calculate acceptance rate
         const providerStats = await Booking.aggregate([
-          { 
-            $match: { 
+          {
+            $match: {
               provider: provider._id,
               'notifiedProviders.response': 'accepted'
-            } 
+            }
           },
           {
             $group: {
@@ -189,14 +114,14 @@ async function searchAndNotifyProviders(booking) {
             }
           }
         ]);
-        
-        const totalNotified = booking.notifiedProviders.filter(np => 
+
+        const totalNotified = booking.notifiedProviders.filter(np =>
           np.provider.toString() === provider._id.toString()
         ).length;
-        
-        const acceptanceRate = totalNotified > 0 ? 
+
+        const acceptanceRate = totalNotified > 0 ?
           (providerStats[0]?.accepted || 0) / totalNotified * 100 : 100;
-        
+
         return {
           provider,
           distance,
@@ -232,7 +157,7 @@ async function searchAndNotifyProviders(booking) {
         const provider = pwd.provider;
         const distance = pwd.distance;
         const estimatedTime = pwd.estimatedTime;
-        
+
         // Prepare notification data - NO EXPIRY TIME
         const notificationData = {
           bookingId: booking._id,
@@ -280,102 +205,11 @@ async function searchAndNotifyProviders(booking) {
 // ========================== PROVIDER ACCEPTS BOOKING ==========================
 exports.acceptBooking = async (req, res) => {
   try {
-    const incomingId = req.params.id;
-    const providerId = req.user._id;
-
-    console.log("Incoming Booking ID:", incomingId);
-    console.log("Provider ID:", providerId);
-
-    let booking;
-
-    // ---------------------------------------------------
-    // 1️⃣ Find booking using either ObjectId or bookingId
-    // ---------------------------------------------------
-    if (mongoose.Types.ObjectId.isValid(incomingId)) {
-      booking = await Booking.findById(incomingId);
-    } else {
-      booking = await Booking.findOne({ bookingId: incomingId });
-    }
-
-    if (!booking) {
-      return res.status(404).json({
-        success: false,
-        message: "Booking not found",
-      });
-    }
-
-    // ---------------------------------------------------
-    // 2️⃣ Block if booking is already accepted/completed
-    // ---------------------------------------------------
-    if (booking.status !== "searching") {
-      return res.status(400).json({
-        success: false,
-        message: "This booking is no longer available",
-        currentStatus: booking.status,
-      });
-    }
-
-    // ---------------------------------------------------
-    // 3️⃣ Ensure this provider is notified for the booking
-    // ---------------------------------------------------
-    const notifiedProvider = booking.notifiedProviders.find(
-      np => np.provider.toString() === providerId.toString()
-    );
-
-    if (!notifiedProvider) {
-      return res.status(403).json({
-        success: false,
-        message: "You are not allowed to accept this booking",
-      });
-    }
-
-    // 4️⃣ Prevent double accept
-    if (notifiedProvider.response !== "pending") {
-      return res.status(400).json({
-        success: false,
-        message: "You already responded to this booking",
-      });
-    }
-    // ---------------------------------------------------
-    // 4️⃣ Assign provider + update status
-    // ---------------------------------------------------
-    booking.provider = providerId;
-    booking.status = "provider-assigned";
-    await booking.save();
-
-    // ---------------------------------------------------
-    // 5️⃣ Send Notification to User
-    // ---------------------------------------------------
-    try {
-      await PushNotificationService.sendToUser(
-        booking.user,
-        "Booking Accepted",
-        "Your booking has been accepted by a service provider.",
-        {
-          bookingId: booking.bookingId || booking._id.toString(),
-          type: "booking_accept",
-        }
-      );
-    } catch (err) {
-      console.log("Push notification error:", err.message);
-    }
-
-    // ---------------------------------------------------
-    // 6️⃣ Success Response
-    // ---------------------------------------------------
-    return res.status(200).json({
-      success: true,
-      message: "Booking accepted successfully",
-      booking,
-    });
-
+    const booking = await BookingService.acceptBooking(req.params.id, req.user._id, req.app);
+    return ResponseHandler.success(res, { booking }, 'Booking accepted successfully');
   } catch (error) {
-    console.error("Accept booking error:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Server error",
-      error: error.message,
-    });
+    logger.error(`Accept booking error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
   }
 };
 
@@ -385,27 +219,9 @@ exports.rejectBooking = async (req, res) => {
   try {
     const { bookingId } = req.params;
     const providerId = req.user._id;
-    
-    const booking = await Booking.findById(bookingId);
-    
-    if (!booking) {
-      return ResponseHandler.error(res, 'Booking not found', 404);
-    }
-    
-    const notifiedProvider = booking.notifiedProviders.find(
-      np => np.provider.toString() === providerId.toString()
-    );
-    
-    if (!notifiedProvider) {
-      return ResponseHandler.error(res, 'You were not notified for this booking', 403);
-    }
-    
-    notifiedProvider.response = 'rejected';
-    notifiedProvider.respondedAt = new Date();
-    
-    await booking.save();
-    
-    ResponseHandler.success(res, null, 'Booking rejected');
+
+    const booking = await BookingService.rejectBooking(bookingId, providerId);
+    ResponseHandler.success(res, { bookingId: booking._id }, 'Booking rejected');
   } catch (error) {
     logger.error(`Reject booking error: ${error.message}`);
     ResponseHandler.error(res, error.message, 500);
@@ -415,30 +231,30 @@ exports.rejectBooking = async (req, res) => {
 // ========================== UPDATE PROVIDER LOCATION ==========================
 exports.updateProviderLocation = async (req, res) => {
   try {
-    const  bookingId  = req.params.id;
+    const bookingId = req.params.id;
     const { latitude, longitude } = req.body;
     const providerId = req.user._id;
-    
+
     const booking = await Booking.findOne({
       _id: bookingId,
       provider: providerId
     });
-    
+
     if (!booking) {
       return ResponseHandler.error(res, 'Booking not found', 404);
     }
-    
+
     if (!['provider-assigned', 'on-the-way', 'in-progress'].includes(booking.status)) {
       return ResponseHandler.error(res, 'Cannot update location for this booking status', 400);
     }
-    
+
     // Update provider location
     booking.tracking.providerLocation = {
       type: 'Point',
       coordinates: [longitude, latitude],
       updatedAt: new Date()
     };
-    
+
     // Calculate distance and ETA to user location
     const userLocation = booking.address.location.coordinates;
     const distance = GeoService.calculateDistance(
@@ -447,16 +263,16 @@ exports.updateProviderLocation = async (req, res) => {
       userLocation[1],
       userLocation[0]
     );
-    
+
     booking.tracking.distance = distance;
-    
+
     // Estimate arrival time
     const durationMinutes = calculateEstimatedTime(distance);
     booking.tracking.duration = Math.round(durationMinutes);
     booking.tracking.estimatedArrival = new Date(Date.now() + durationMinutes * 60000);
-    
+
     await booking.save();
-    
+
     // Notify user if provider is very close (< 500m)
     if (distance < 0.5 && booking.status === 'on-the-way') {
       await PushNotificationService.sendToUser(
@@ -465,7 +281,7 @@ exports.updateProviderLocation = async (req, res) => {
         `${req.user.name} is nearby and will reach in ${Math.round(durationMinutes)} minutes.`
       );
     }
-    
+
     ResponseHandler.success(res, {
       distance,
       duration: durationMinutes,
@@ -478,194 +294,131 @@ exports.updateProviderLocation = async (req, res) => {
 };
 // ==================== MARK BOOKING AS PAID (PERSONAL PAYMENT) ====================
 exports.markBookingPaid = async (req, res) => {
-    try {
-        const { bookingId } = req.params;
-        const { paymentMethod = 'cash', transactionId } = req.body;
-        const providerId = req.user._id;
-        const booking = await Booking.findOne({
-            _id: bookingId,
-            provider: providerId,
-            status: { $in: ['completed', 'in-progress'] }
-        });
-        if (!booking) {
-            return ResponseHandler.error(res, 'Booking not found or not authorized', 404);
-        }
-
-        // 2️⃣ If payment already done (online at booking time), skip payment logic
-        if (booking.payment?.status === 'paid') {
-            booking.status = 'completed';  // mark service as completed
-            booking.completedAt = new Date();
-
-            await booking.save();
-
-            return ResponseHandler.success(res, {
-                booking,
-                commission: null
-            }, 'Service completed successfully');
-        }
-
-        const personalPaymentMethods = ['cash', 'personal_upi', 'cod'];
-        const isPersonalPayment = personalPaymentMethods.includes(paymentMethod);
-        booking.payment.method = paymentMethod;
-        booking.payment.status = 'paid';
-        booking.payment.paidAt = new Date();
-        booking.payment.receivedBy = isPersonalPayment ? 'provider' : 'company';
-        if (transactionId) {
-            booking.payment.transactionId = transactionId;
-        }
-        const payment = await Payment.create({
-            transactionId: transactionId || `PAY-${Date.now()}`,
-            booking: booking._id,
-            user: booking.user,
-            provider: providerId,
-            amount: booking.totalAmount,
-            paymentMethod: paymentMethod,
-            paymentDestination: isPersonalPayment ? 'personal_account' : 'company_account',
-            paymentType: 'service',
-            status: 'success',
-            paymentDate: new Date()
-        });
-
-        // 6️⃣ Handle commission
-        if (isPersonalPayment) {
-            // Track pending commission
-            await CommissionService.trackPersonalPayment(payment);
-
-            booking.payment.commissionStatus = 'pending';
-            booking.payment.commissionAmount = payment.commission.pendingCommission;
-            booking.payment.commissionDueDate = payment.pendingCommission.dueDate;
-        } else {
-            // Auto payout for company payment
-            await CommissionService.processAutoPayout(payment);
-            booking.payment.commissionStatus = 'not_applicable';
-        }
-
-        // 7️⃣ Update service status
-        booking.status = 'completed';
-        booking.completedAt = new Date();
-
-        await booking.save();
-
-        // 8️⃣ Send notification to user
-        await PushNotificationService.sendToUser(
-            booking.user,
-            'Payment Received ✅',
-            `Payment of ₹${booking.totalAmount} has been received for your ${booking.serviceDetails?.title || 'booking'}.`
-        );
-
-        // 9️⃣ Return response
-        ResponseHandler.success(res, {
-            booking,
-            commission: isPersonalPayment ? {
-                amount: payment.commission.pendingCommission,
-                dueDate: payment.pendingCommission.dueDate,
-                status: 'pending'
-            } : null
-        }, 'Payment recorded successfully');
-
-    } catch (error) {
-        logger.error(`Mark booking paid error: ${error.message}`);
-        ResponseHandler.error(res, error.message, 500);
+  try {
+    const { bookingId } = req.params;
+    const { paymentMethod = 'cash', transactionId } = req.body;
+    const providerId = req.user._id;
+    const booking = await Booking.findOne({
+      _id: bookingId,
+      provider: providerId,
+      status: { $in: ['completed', 'in-progress'] }
+    });
+    if (!booking) {
+      return ResponseHandler.error(res, 'Booking not found or not authorized', 404);
     }
+
+    // 2️⃣ If payment already done (online at booking time), skip payment logic
+    if (booking.payment?.status === 'paid') {
+      booking.status = 'completed';  // mark service as completed
+      booking.completedAt = new Date();
+
+      await booking.save();
+
+      return ResponseHandler.success(res, {
+        booking,
+        commission: null
+      }, 'Service completed successfully');
+    }
+
+    const personalPaymentMethods = ['cash', 'personal_upi', 'cod'];
+    const isPersonalPayment = personalPaymentMethods.includes(paymentMethod);
+    booking.payment.method = paymentMethod;
+    booking.payment.status = 'paid';
+    booking.payment.paidAt = new Date();
+    booking.payment.receivedBy = isPersonalPayment ? 'provider' : 'company';
+    if (transactionId) {
+      booking.payment.transactionId = transactionId;
+    }
+    const payment = await Payment.create({
+      transactionId: transactionId || `PAY-${Date.now()}`,
+      booking: booking._id,
+      user: booking.user,
+      provider: providerId,
+      amount: booking.totalAmount,
+      paymentMethod: paymentMethod,
+      paymentDestination: isPersonalPayment ? 'personal_account' : 'company_account',
+      paymentType: 'service',
+      status: 'success',
+      paymentDate: new Date()
+    });
+
+    // 6️⃣ Handle commission
+    if (isPersonalPayment) {
+      // Track pending commission
+      await CommissionService.trackPersonalPayment(payment);
+
+      booking.payment.commissionStatus = 'pending';
+      booking.payment.commissionAmount = payment.commission.pendingCommission;
+      booking.payment.commissionDueDate = payment.pendingCommission.dueDate;
+    } else {
+      // Auto payout for company payment
+      await CommissionService.processAutoPayout(payment);
+      booking.payment.commissionStatus = 'not_applicable';
+    }
+
+    // 7️⃣ Update service status
+    booking.status = 'completed';
+    booking.completedAt = new Date();
+
+    await booking.save();
+
+    // 8️⃣ Send notification to user
+    await PushNotificationService.sendToUser(
+      booking.user,
+      'Payment Received ✅',
+      `Payment of ₹${booking.totalAmount} has been received for your ${booking.serviceDetails?.title || 'booking'}.`
+    );
+
+    // 9️⃣ Return response
+    ResponseHandler.success(res, {
+      booking,
+      commission: isPersonalPayment ? {
+        amount: payment.commission.pendingCommission,
+        dueDate: payment.pendingCommission.dueDate,
+        status: 'pending'
+      } : null
+    }, 'Payment recorded successfully');
+
+  } catch (error) {
+    logger.error(`Mark booking paid error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
 };
 
 // ✅ Get provider commission summary
 exports.getProviderCommissionSummary = async (req, res) => {
-    try {
-        const providerId = req.user._id;
-        
-        const summary = await CommissionService.getCommissionSummary(providerId, 'provider');
-        
-        // Get provider model for total earnings
-        const provider = await ServiceProvider.findById(providerId);
-        
-        ResponseHandler.success(res, {
-            summary,
-            earnings: {
-                total: provider.earnings.total,
-                commission: {
-                    due: provider.commission.due,
-                    paid: provider.commission.paid
-                }
-            },
-            commissionRate: '20% (personal payments)'
-        }, 'Commission summary fetched');
-        
-    } catch (error) {
-        logger.error(`Get provider commission error: ${error.message}`);
-        ResponseHandler.error(res, error.message, 500);
-    }
+  try {
+    const providerId = req.user._id;
+
+    const summary = await CommissionService.getCommissionSummary(providerId, 'provider');
+
+    // Get provider model for total earnings
+    const provider = await ServiceProvider.findById(providerId);
+
+    ResponseHandler.success(res, {
+      summary,
+      earnings: {
+        total: provider.earnings.total,
+        commission: {
+          due: provider.commission.due,
+          paid: provider.commission.paid
+        }
+      },
+      commissionRate: '20% (personal payments)'
+    }, 'Commission summary fetched');
+
+  } catch (error) {
+    logger.error(`Get provider commission error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
 };
 // ========================== UPDATE BOOKING STATUS ==========================
 exports.updateBookingStatus = async (req, res) => {
   try {
     const bookingId = req.params.id;
-    const { status, completionNotes, latitude, longitude } = req.body;
     const providerId = req.user._id;
-    
-    const booking = await Booking.findOne({
-      _id: bookingId,
-      provider: providerId
-    }).populate('user');
-    
-    if (!booking) {
-      return ResponseHandler.error(res, 'Booking not found', 404);
-    }
-    
-    const oldStatus = booking.status;
-    booking.status = status;
-    
-    // Update timestamps
-    if (status === 'on-the-way') {
-      booking.timestamps.onTheWayAt = new Date();
-    } else if (status === 'reached') {
-      booking.timestamps.reachedAt = new Date();
-    } else if (status === 'in-progress') {
-      booking.timestamps.inProgressAt = new Date();
-    } else if (status === 'completed') {
-      booking.timestamps.completedAt = new Date();
-      booking.completedAt = new Date();
-      if (completionNotes) booking.completionNotes = completionNotes;
-      
-      // Update provider stats
-      await ServiceProvider.findByIdAndUpdate(providerId, {
-        $inc: { completedServices: 1 }
-      });
-      
-      // Make provider available again
-      await ServiceProvider.findByIdAndUpdate(providerId, {
-        'availability.isAvailable': true,
-        'availability.lastStatusUpdate': new Date()
-      });
-    }
-    
-    // Update location if provided
-    if (latitude && longitude) {
-      booking.tracking.providerLocation = {
-        type: 'Point',
-        coordinates: [longitude, latitude],
-        updatedAt: new Date()
-      };
-    }
-    
-    await booking.save();
-    
-    // Notify user about status change
-    const statusMessages = {
-      'on-the-way': `${req.user.name} is on the way to your location`,
-      'reached': `${req.user.name} has reached your location`,
-      'in-progress': `Service is now in progress`,
-      'completed': `Service completed successfully`
-    };
-    
-    if (statusMessages[status]) {
-      await PushNotificationService.sendToUser(
-        booking.user._id,
-        'Booking Status Updated',
-        statusMessages[status]
-      );
-    }
-    
+
+    const booking = await BookingService.updateStatus(bookingId, providerId, req.body, req.app);
     ResponseHandler.success(res, { booking }, 'Status updated successfully');
   } catch (error) {
     logger.error(`Update status error: ${error.message}`);
@@ -677,17 +430,17 @@ exports.updateBookingStatus = async (req, res) => {
 exports.getTrackingInfo = async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     const booking = await Booking.findOne({
       _id: id,
       user: req.user._id
     }).populate('provider', 'name phone profilePicture vehicle ratings')
       .populate('service', 'title category');
-    
+
     if (!booking) {
       return ResponseHandler.error(res, 'Booking not found', 404);
     }
-    
+
     // Calculate searching duration if still searching
     let searchingDuration = null;
     if (booking.status === 'searching') {
@@ -699,7 +452,7 @@ exports.getTrackingInfo = async (req, res) => {
         searchingDuration = Math.floor(timeElapsed / 60); // minutes
       }
     }
-    
+
     const trackingInfo = {
       bookingId: booking.bookingId,
       status: booking.status,
@@ -714,7 +467,7 @@ exports.getTrackingInfo = async (req, res) => {
       searchingDuration,
       canCancel: booking.status === 'searching'
     };
-    
+
     ResponseHandler.success(res, trackingInfo, 'Tracking info fetched');
   } catch (error) {
     logger.error(`Get tracking error: ${error.message}`);
@@ -857,7 +610,7 @@ exports.getBookingDetails = async (req, res) => {
         const notifiedAt = new Date(firstNotification.notifiedAt);
         const now = new Date();
         const timeElapsed = (now - notifiedAt) / 1000;
-        
+
         acceptanceInfo = {
           searchingDuration: Math.floor(timeElapsed / 60), // minutes searching
           searchingDurationSeconds: Math.floor(timeElapsed % 60),
@@ -891,21 +644,21 @@ exports.cancelBooking = async (req, res) => {
     const { id } = req.params;
     const { cancellationReason } = req.body;
     const userId = req.user._id;
-    
+
     const booking = await Booking.findOne({
       _id: id,
       user: userId
     }).populate('provider');
-    
+
     if (!booking) {
       return ResponseHandler.error(res, 'Booking not found', 404);
     }
-    
+
     // Check if booking can be cancelled
     if (['completed', 'cancelled'].includes(booking.status)) {
       return ResponseHandler.error(res, 'Cannot cancel booking with current status', 400);
     }
-    
+
     // ⚡ ALLOW CANCELLATION ONLY IF STILL SEARCHING (no charges)
     if (booking.status !== 'searching') {
       // If provider already assigned, apply cancellation charges
@@ -913,15 +666,15 @@ exports.cancelBooking = async (req, res) => {
         // Calculate cancellation charges (20% fee)
         const cancellationCharge = booking.totalAmount * 0.2;
         const refundAmount = booking.totalAmount - cancellationCharge;
-        
+
         // Update booking status
         booking.status = 'cancelled';
         booking.cancellationReason = cancellationReason || 'Cancelled by user';
         booking.cancelledBy = 'user';
         booking.timestamps.cancelledAt = new Date();
-        
+
         await booking.save();
-        
+
         // Notify provider
         if (booking.provider) {
           await PushNotificationService.sendToUser(
@@ -929,37 +682,37 @@ exports.cancelBooking = async (req, res) => {
             'Booking Cancelled',
             `Booking ${booking.bookingId} has been cancelled by the user.`
           );
-          
+
           // Make provider available again
           await ServiceProvider.findByIdAndUpdate(booking.provider._id, {
             'availability.isAvailable': true,
             'availability.lastStatusUpdate': new Date()
           });
         }
-        
-        return ResponseHandler.success(res, { 
+
+        return ResponseHandler.success(res, {
           booking,
           cancellationCharge,
           refundAmount,
           message: 'Booking cancelled. 20% cancellation charge applied.'
         }, 'Booking cancelled with charges');
       }
-      
+
       return ResponseHandler.error(res, 'Cannot cancel booking with current status', 400);
     }
-    
+
     // ⚡ NO CANCELLATION CHARGE FOR SEARCHING BOOKINGS
     // Update booking status
     booking.status = 'cancelled';
     booking.cancellationReason = cancellationReason || 'Cancelled by user';
     booking.cancelledBy = 'user';
     booking.timestamps.cancelledAt = new Date();
-    
+
     await booking.save();
-    
+
     // Notify all pending providers
     const pendingProviders = booking.notifiedProviders.filter(np => np.response === 'pending');
-    
+
     if (pendingProviders.length > 0) {
       const bulkNotifications = pendingProviders.map(notifiedProvider => ({
         recipient: notifiedProvider.provider,
@@ -974,12 +727,12 @@ exports.cancelBooking = async (req, res) => {
         },
         channels: { push: true, email: false, sms: false }
       }));
-      
+
       await Notification.insertMany(bulkNotifications);
-      
+
       // Send push notifications
       await Promise.all(
-        pendingProviders.map(np => 
+        pendingProviders.map(np =>
           PushNotificationService.sendToProvider(np.provider, {
             title: 'Booking Cancelled',
             body: 'This booking has been cancelled by the user'
@@ -987,8 +740,8 @@ exports.cancelBooking = async (req, res) => {
         )
       );
     }
-    
-    ResponseHandler.success(res, { 
+
+    ResponseHandler.success(res, {
       booking,
       message: 'Booking cancelled successfully. No cancellation charges applied.'
     }, 'Booking cancelled successfully');
@@ -1003,24 +756,24 @@ exports.getUserBookings = async (req, res) => {
   try {
     const userId = req.user._id;
     const { status, page = 1, limit = 10, sortBy = 'createdAt', order = 'desc' } = req.query;
-    
+
     const query = { user: userId };
     if (status) {
       query.status = status;
     }
-    
+
     const skip = (page - 1) * limit;
     const sortOrder = order === 'asc' ? 1 : -1;
-    
+
     const bookings = await Booking.find(query)
       .populate('service', 'title category pricing')
       .populate('provider', 'name phone profilePicture ratings')
       .sort({ [sortBy]: sortOrder })
       .skip(skip)
       .limit(parseInt(limit));
-    
+
     const total = await Booking.countDocuments(query);
-    
+
     ResponseHandler.success(res, {
       bookings,
       pagination: {
@@ -1041,24 +794,24 @@ exports.getProviderBookings = async (req, res) => {
   try {
     const providerId = req.user._id;
     const { status, page = 1, limit = 10, sortBy = 'createdAt', order = 'desc' } = req.query;
-    
+
     const query = { provider: providerId };
     if (status) {
       query.status = status;
     }
-    
+
     const skip = (page - 1) * limit;
     const sortOrder = order === 'asc' ? 1 : -1;
-    
+
     const bookings = await Booking.find(query)
       .populate('user', 'name phone address')
       .populate('service', 'title category pricing')
       .sort({ [sortBy]: sortOrder })
       .skip(skip)
       .limit(parseInt(limit));
-    
+
     const total = await Booking.countDocuments(query);
-    
+
     ResponseHandler.success(res, {
       bookings,
       pagination: {
@@ -1078,7 +831,7 @@ exports.getProviderBookings = async (req, res) => {
 exports.getProviderStats = async (req, res) => {
   try {
     const providerId = req.user._id;
-    
+
     const stats = await Booking.aggregate([
       { $match: { provider: new mongoose.Types.ObjectId(providerId) } },
       {
@@ -1089,15 +842,15 @@ exports.getProviderStats = async (req, res) => {
         }
       }
     ]);
-    
+
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
-    
+
     const todayBookings = await Booking.countDocuments({
       provider: providerId,
       createdAt: { $gte: todayStart }
     });
-    
+
     const todayEarnings = await Booking.aggregate([
       {
         $match: {
@@ -1113,7 +866,7 @@ exports.getProviderStats = async (req, res) => {
         }
       }
     ]);
-    
+
     const totalEarnings = await Booking.aggregate([
       {
         $match: {
@@ -1128,23 +881,23 @@ exports.getProviderStats = async (req, res) => {
         }
       }
     ]);
-    
+
     // Calculate acceptance rate
     const notifiedBookings = await Booking.countDocuments({
       'notifiedProviders.provider': providerId
     });
-    
+
     const acceptedBookings = await Booking.countDocuments({
       provider: providerId
     });
-    
-    const acceptanceRate = notifiedBookings > 0 ? 
+
+    const acceptanceRate = notifiedBookings > 0 ?
       (acceptedBookings / notifiedBookings * 100).toFixed(1) : 0;
-    
+
     // Calculate average rating
     const provider = await ServiceProvider.findById(providerId);
     const averageRating = provider.ratings?.average || 0;
-    
+
     ResponseHandler.success(res, {
       statusStats: stats,
       todayBookings,
@@ -1166,31 +919,31 @@ exports.getBookingAcceptanceStatus = async (req, res) => {
     const { bookingId } = req.params;
     const userId = req.user._id;
     const userRole = req.user.role;
-    
+
     let query = { _id: bookingId };
     if (userRole === 'user') query.user = userId;
-    
+
     const booking = await Booking.findOne(query)
       .populate('user', 'name phone')
       .populate('provider', 'name phone profilePicture ratings address vehicle')
       .lean();
-    
+
     if (!booking) {
       return ResponseHandler.error(res, 'Booking not found', 404);
     }
-    
+
     // Calculate time elapsed since searching started
     let acceptanceInfo = null;
     if (booking.status === 'searching') {
       const firstNotification = booking.notifiedProviders[0];
       let timeElapsed = 0;
-      
+
       if (firstNotification) {
         const notifiedAt = new Date(firstNotification.notifiedAt);
         const now = new Date();
         timeElapsed = (now - notifiedAt) / 1000; // in seconds
       }
-      
+
       acceptanceInfo = {
         status: 'waiting_for_acceptance',
         searchingDuration: Math.floor(timeElapsed / 60), // minutes searching
@@ -1207,7 +960,7 @@ exports.getBookingAcceptanceStatus = async (req, res) => {
       // Calculate provider's ETA
       const provider = booking.provider;
       const userLocation = booking.address.location.coordinates;
-      
+
       if (provider.address && provider.address.location) {
         const distance = GeoService.calculateDistance(
           provider.address.location.coordinates[1],
@@ -1215,9 +968,9 @@ exports.getBookingAcceptanceStatus = async (req, res) => {
           userLocation[1],
           userLocation[0]
         );
-        
+
         const estimatedTime = calculateEstimatedTime(distance);
-        
+
         acceptanceInfo = {
           status: 'provider_accepted',
           provider: {
@@ -1229,7 +982,7 @@ exports.getBookingAcceptanceStatus = async (req, res) => {
           },
           distance: distance.toFixed(1),
           estimatedArrival: estimatedTime,
-          estimatedArrivalTime: booking.tracking?.estimatedArrival || 
+          estimatedArrivalTime: booking.tracking?.estimatedArrival ||
             new Date(Date.now() + estimatedTime * 60000),
           providerLocation: booking.tracking?.providerLocation,
           providerOnTheWay: booking.status === 'on-the-way',
@@ -1249,7 +1002,7 @@ exports.getBookingAcceptanceStatus = async (req, res) => {
         canCreateNew: true
       };
     }
-    
+
     ResponseHandler.success(res, {
       bookingId: booking.bookingId,
       status: booking.status,
@@ -1261,7 +1014,7 @@ exports.getBookingAcceptanceStatus = async (req, res) => {
       canCancel: booking.status === 'searching',
       canRetry: ['cancelled', 'no-provider-found'].includes(booking.status)
     }, 'Booking acceptance status fetched');
-    
+
   } catch (error) {
     logger.error(`Get acceptance status error: ${error.message}`);
     ResponseHandler.error(res, error.message, 500);
@@ -1272,15 +1025,15 @@ exports.getBookingAcceptanceStatus = async (req, res) => {
 exports.getAllBookings = async (req, res) => {
   try {
     const { status, page = 1, limit = 20, sortBy = 'createdAt', order = 'desc' } = req.query;
-    
+
     const query = {};
     if (status) {
       query.status = status;
     }
-    
+
     const skip = (page - 1) * limit;
     const sortOrder = order === 'asc' ? 1 : -1;
-    
+
     const bookings = await Booking.find(query)
       .populate('user', 'name phone email')
       .populate('provider', 'name phone')
@@ -1288,9 +1041,9 @@ exports.getAllBookings = async (req, res) => {
       .sort({ [sortBy]: sortOrder })
       .skip(skip)
       .limit(parseInt(limit));
-    
+
     const total = await Booking.countDocuments(query);
-    
+
     ResponseHandler.success(res, {
       bookings,
       pagination: {
@@ -1311,24 +1064,24 @@ exports.adminUpdateBookingStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { status, cancellationReason, cancelledBy } = req.body;
-    
+
     const booking = await Booking.findById(id);
-    
+
     if (!booking) {
       return ResponseHandler.error(res, 'Booking not found', 404);
     }
-    
+
     const oldStatus = booking.status;
     booking.status = status;
-    
+
     if (status === 'cancelled') {
       booking.cancellationReason = cancellationReason;
       booking.cancelledBy = cancelledBy || 'admin';
       booking.timestamps.cancelledAt = new Date();
     }
-    
+
     await booking.save();
-    
+
     // Notify user about status change
     if (booking.user) {
       await PushNotificationService.sendToUser(
@@ -1337,7 +1090,7 @@ exports.adminUpdateBookingStatus = async (req, res) => {
         `Your booking ${booking.bookingId} status has been updated to ${status}`
       );
     }
-    
+
     ResponseHandler.success(res, { booking }, 'Booking status updated successfully');
   } catch (error) {
     logger.error(`Admin update booking status error: ${error.message}`);
@@ -1351,18 +1104,18 @@ exports.getBookingAnalytics = async (req, res) => {
     const { days = 30 } = req.query;
     const userId = req.user._id;
     const userRole = req.user.role;
-    
+
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - parseInt(days));
-    
+
     let matchQuery = { createdAt: { $gte: startDate } };
-    
+
     if (userRole === 'user') {
       matchQuery.user = userId;
     } else if (userRole === 'provider') {
       matchQuery.provider = userId;
     }
-    
+
     // Daily bookings count
     const dailyBookings = await Booking.aggregate([
       { $match: matchQuery },
@@ -1375,7 +1128,7 @@ exports.getBookingAnalytics = async (req, res) => {
       },
       { $sort: { _id: 1 } }
     ]);
-    
+
     // Status distribution
     const statusDistribution = await Booking.aggregate([
       { $match: matchQuery },
@@ -1386,7 +1139,7 @@ exports.getBookingAnalytics = async (req, res) => {
         }
       }
     ]);
-    
+
     // Monthly trend
     const monthlyTrend = await Booking.aggregate([
       { $match: matchQuery },
@@ -1399,7 +1152,7 @@ exports.getBookingAnalytics = async (req, res) => {
       },
       { $sort: { _id: 1 } }
     ]);
-    
+
     ResponseHandler.success(res, {
       dailyBookings,
       statusDistribution,
@@ -1417,30 +1170,30 @@ exports.resendProviderNotifications = async (req, res) => {
   try {
     const { bookingId } = req.params;
     const userId = req.user._id;
-    
+
     const booking = await Booking.findOne({
       _id: bookingId,
       user: userId
     });
-    
+
     if (!booking) {
       return ResponseHandler.error(res, 'Booking not found', 404);
     }
-    
+
     if (booking.status !== 'searching') {
       return ResponseHandler.error(res, 'Cannot resend notifications for this booking status', 400);
     }
-    
+
     // Clear existing notifications
     booking.notifiedProviders = [];
     booking.searchAttempts = 0;
     booking.providerSearchRadius = 5;
-    
+
     await booking.save();
-    
+
     // Restart provider search
     searchAndNotifyProviders(booking);
-    
+
     ResponseHandler.success(res, { booking }, 'Provider notifications resent successfully');
   } catch (error) {
     logger.error(`Resend notifications error: ${error.message}`);
@@ -1454,13 +1207,13 @@ exports.resendProviderNotifications = async (req, res) => {
 function calculateEstimatedTime(distance) {
   // Base time calculation (30 km/h average speed)
   const baseTime = (distance / 30) * 60; // in minutes
-  
+
   // Add traffic factor (random between 1.2 to 1.8)
   const trafficFactor = 1.2 + Math.random() * 0.6;
-  
+
   // Add pickup preparation time (2-5 minutes)
   const preparationTime = 2 + Math.random() * 3;
-  
+
   return Math.ceil(baseTime * trafficFactor + preparationTime);
 }
 

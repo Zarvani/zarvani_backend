@@ -5,8 +5,7 @@ const orderSchema = new mongoose.Schema({
   orderId: {
     type: String,
     unique: true,
-    required: true,
-    index: true
+    required: true
   },
   user: {
     type: mongoose.Schema.Types.ObjectId,
@@ -158,7 +157,7 @@ const orderSchema = new mongoose.Schema({
     paidAt: Date,
     refundId: String,
     refundedAt: Date,
-    
+
     // ✅ ADD THESE NEW FIELDS:
     receivedBy: {
       type: String,
