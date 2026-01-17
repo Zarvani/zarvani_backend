@@ -5,6 +5,7 @@ const ServiceProvider = require('../models/ServiceProvider');
 const Shop = require('../models/Shop');
 const { Admin } = require('../models/Admin');
 const EmailService = require('../services/emailService');
+const SMSService = require('../services/smsService');
 const ResponseHandler = require('../utils/responseHandler');
 const getAddressFromCoords = require('../utils/getAddressFromCoords')
 const logger = require('../utils/logger');
@@ -46,7 +47,7 @@ exports.sendSignupOTP = async (req, res) => {
     if (isEmail) {
       await EmailService.sendOTP(identifier, otp, "New User");
     } else {
-      // OTP logging removed for security
+      await SMSService.sendOTP(identifier, otp, "New User");
     }
 
     return ResponseHandler.success(
@@ -86,16 +87,30 @@ exports.sendOTP = async (req, res) => {
     const otp = user.generateOTP();
     await user.save();
 
-    // Send OTP via email or SMS
+    // Send OTP via email and/or SMS
+    let sentTo = [];
     if (isEmail) {
       await EmailService.sendOTP(identifier, otp, user.name);
+      sentTo.push('email');
+
+      // If user has a phone, send to phone as well
+      if (user.phone) {
+        await SMSService.sendOTP(user.phone, otp, user.name);
+        sentTo.push('phone');
+      }
     } else {
-      // TODO: Implement SMS service
-      // OTP logging removed for security
+      await SMSService.sendOTP(identifier, otp, user.name);
+      sentTo.push('phone');
+
+      // If user has an email, send to email as well
+      if (user.email) {
+        await EmailService.sendOTP(user.email, otp, user.name);
+        sentTo.push('email');
+      }
     }
 
     ResponseHandler.success(res,
-      { message: `OTP sent to ${isEmail ? 'email' : 'phone'}` },
+      { message: `OTP sent to ${sentTo.join(' and ')}` },
       'OTP sent successfully'
     );
   } catch (error) {
@@ -571,16 +586,27 @@ exports.loginWithOTP = async (req, res) => {
     await user.save();
 
     // Send OTP
+    let sentTo = [];
     if (isEmail) {
       await EmailService.sendOTP(identifier, otp, user.name);
+      sentTo.push("email");
+      if (user.phone) {
+        await SMSService.sendOTP(user.phone, otp, user.name);
+        sentTo.push("phone");
+      }
     } else {
-      // OTP logging removed for security
+      await SMSService.sendOTP(identifier, otp, user.name);
+      sentTo.push("phone");
+      if (user.email) {
+        await EmailService.sendOTP(user.email, otp, user.name);
+        sentTo.push("email");
+      }
     }
 
     return ResponseHandler.success(
       res,
       {
-        message: "OTP sent successfully. Please verify to login.",
+        message: `OTP sent successfully to ${sentTo.join(" and ")}. Please verify to login.`,
         role
       },
       "OTP sent successfully"

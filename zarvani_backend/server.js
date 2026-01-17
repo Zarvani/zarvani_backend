@@ -11,6 +11,8 @@ const rateLimit = require('express-rate-limit');
 const connectDB = require('./config/db');
 const errorHandler = require('./middleware/errorHandler');
 const logger = require('./utils/logger');
+const swaggerUi = require('swagger-ui-express');
+const swaggerSpec = require('./config/swagger');
 
 // Import routes
 const authRoutes = require('./routes/authRoutes');
@@ -79,6 +81,15 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(morgan('combined', { stream: { write: message => logger.info(message.trim()) } }));
 
 // Health check route
+/**
+ * @swagger
+ * /health:
+ *   get:
+ *     summary: Health check endpoint
+ *     responses:
+ *       200:
+ *         description: Server is healthy
+ */
 app.get('/health', (req, res) => {
   res.status(200).json({
     success: true,
@@ -86,6 +97,9 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString()
   });
 });
+
+// Swagger UI
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 app.use(`/api/v1/auth`, authRoutes);
 app.use(`/api/v1/users`, userRoutes);
