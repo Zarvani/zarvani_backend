@@ -431,7 +431,7 @@ exports.getPaymentAnalytics = async (req, res) => {
     const commissionStats = await CommissionService.getCommissionStats(period);
 
     // Get payment method stats
-    const dateFilter = getDateFilter(period);
+    const dateFilter = CommissionService.getDateFilter(period);
     const paymentMethodStats = await Payment.aggregate([
       {
         $match: {
@@ -578,7 +578,7 @@ exports.getPaymentHistory = async (req, res) => {
     const { page = 1, limit = 50, period = 'all', type } = req.query;
 
     // Build date filter based on period
-    const dateFilter = getDateFilter(period);
+    const dateFilter = CommissionService.getDateFilter(period);
 
     // Build query
     let query = { user: req.user._id, ...dateFilter };
@@ -648,7 +648,7 @@ exports.getShopEarnings = async (req, res) => {
     // Assuming req.user has shop reference or is shop owner
     const shopId = req.user.shop || req.user._id;
 
-    const dateFilter = getDateFilter(period);
+    const dateFilter = CommissionService.getDateFilter(period);
     const query = { shop: shopId, ...dateFilter };
 
     const transactions = await Payment.find(query)
@@ -691,7 +691,7 @@ exports.getProviderEarnings = async (req, res) => {
     // Assuming req.user._id is the provider ID
     const providerId = req.user._id;
 
-    const dateFilter = getDateFilter(period);
+    const dateFilter = CommissionService.getDateFilter(period);
     const query = { provider: providerId, ...dateFilter };
 
     const transactions = await Payment.find(query)
@@ -733,7 +733,7 @@ exports.getOwnerEarnings = async (req, res) => {
     const ownerId = req.user._id;
     const ownerType = req.user.role === 'provider' ? 'provider' : 'shop';
 
-    const dateFilter = getDateFilter(period);
+    const dateFilter = CommissionService.getDateFilter(period);
     const query = { [ownerType]: ownerId, ...dateFilter };
 
     const transactions = await Payment.find(query)
@@ -764,7 +764,7 @@ exports.getAllEarningsOverview = async (req, res) => {
   try {
     const { period = 'month', type = 'all' } = req.query;
 
-    const dateFilter = getDateFilter(period);
+    const dateFilter = CommissionService.getDateFilter(period);
     let query = { ...dateFilter };
 
     // Filter by type if specified
@@ -1289,5 +1289,156 @@ exports.paymentWebhook = async (req, res) => {
     res.status(200).json({ success: false }); // Always return 200 to webhook
   }
 };
-// Methods removed: redundant with CommissionService/PaymentService
+
+// -------------------------------------------------------------------------
+// HELPER FUNCTIONS (Previously missing or removed)
+// -------------------------------------------------------------------------
+
+// Calculate statistics for a user
+async function calculateUserStats(userId, period) {
+  const dateFilter = CommissionService.getDateFilter(period);
+  const stats = await Payment.aggregate([
+    {
+      $match: {
+        user: new mongoose.Types.ObjectId(userId),
+        status: 'success',
+        ...dateFilter
+      }
+    },
+    {
+      $group: {
+        _id: null,
+        totalSpent: { $sum: '$amount' },
+        transactionCount: { $sum: 1 },
+        avgTransaction: { $avg: '$amount' }
+      }
+    }
+  ]);
+
+  return stats[0] || { totalSpent: 0, transactionCount: 0, avgTransaction: 0 };
+}
+
+// Calculate statistics for a shop
+async function calculateShopStats(shopId, period) {
+  const dateFilter = CommissionService.getDateFilter(period);
+  const stats = await Payment.aggregate([
+    {
+      $match: {
+        shop: new mongoose.Types.ObjectId(shopId),
+        status: 'success',
+        ...dateFilter
+      }
+    },
+    {
+      $group: {
+        _id: null,
+        totalEarnings: { $sum: '$amount' },
+        totalCommission: {
+          $sum: {
+            $cond: [
+              { $eq: ['$paymentDestination', 'company_account'] },
+              '$commission.companyCommission',
+              '$commission.pendingCommission'
+            ]
+          }
+        },
+        pendingCommission: {
+          $sum: {
+            $cond: [
+              { $eq: ['$pendingCommission.status', 'pending'] },
+              '$commission.pendingCommission',
+              0
+            ]
+          }
+        },
+        transactionCount: { $sum: 1 }
+      }
+    }
+  ]);
+
+  const result = stats[0] || { totalEarnings: 0, totalCommission: 0, pendingCommission: 0, transactionCount: 0 };
+  result.netEarnings = result.totalEarnings - result.totalCommission;
+  return result;
+}
+
+// Calculate statistics for a provider
+async function calculateProviderStats(providerId, period) {
+  const dateFilter = CommissionService.getDateFilter(period);
+  const stats = await Payment.aggregate([
+    {
+      $match: {
+        provider: new mongoose.Types.ObjectId(providerId),
+        status: 'success',
+        ...dateFilter
+      }
+    },
+    {
+      $group: {
+        _id: null,
+        totalEarnings: { $sum: '$amount' },
+        totalCommission: {
+          $sum: {
+            $cond: [
+              { $eq: ['$paymentDestination', 'company_account'] },
+              '$commission.companyCommission',
+              '$commission.pendingCommission'
+            ]
+          }
+        },
+        pendingCommission: {
+          $sum: {
+            $cond: [
+              { $eq: ['$pendingCommission.status', 'pending'] },
+              '$commission.pendingCommission',
+              0
+            ]
+          }
+        },
+        transactionCount: { $sum: 1 }
+      }
+    }
+  ]);
+
+  const result = stats[0] || { totalEarnings: 0, totalCommission: 0, pendingCommission: 0, transactionCount: 0 };
+  result.netEarnings = result.totalEarnings - result.totalCommission;
+  return result;
+}
+
+// Calculate statistics for superadmin overview
+async function calculateSuperAdminStats(period, type) {
+  const dateFilter = CommissionService.getDateFilter(period);
+  const match = { status: 'success', ...dateFilter };
+
+  if (type === 'shop') match.shop = { $ne: null };
+  if (type === 'provider') match.provider = { $ne: null };
+
+  const stats = await Payment.aggregate([
+    { $match: match },
+    {
+      $group: {
+        _id: null,
+        totalRevenue: { $sum: '$amount' },
+        totalCommission: {
+          $sum: {
+            $cond: [
+              { $eq: ['$paymentDestination', 'company_account'] },
+              '$commission.companyCommission',
+              {
+                $cond: [
+                  { $eq: ['$pendingCommission.status', 'paid'] },
+                  '$commission.pendingCommission',
+                  0
+                ]
+              }
+            ]
+          }
+        },
+        transactionCount: { $sum: 1 }
+      }
+    }
+  ]);
+
+  return stats[0] || { totalRevenue: 0, totalCommission: 0, transactionCount: 0 };
+}
+
 module.exports = exports;
