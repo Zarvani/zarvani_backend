@@ -22,7 +22,7 @@ class SMSService {
             const formattedPhone = phone.startsWith('+') ? phone : `+${phone}`;
 
             const message = await this.client.messages.create({
-                body: `\n🔑 Yetzo Security: Your OTP is ${otp}.\n\nWelcome ${name || 'User'}! This code is valid for 10 minutes. Do not share this with anyone.`,
+                body: `Yetzo Security: Your OTP is ${otp}. Valid for 10 minutes. Do not share this code with anyone.`,
                 from: this.serviceSid, // This could be a Messaging Service SID or a Twilio number
                 to: formattedPhone
             });

@@ -93,6 +93,8 @@ const orderSchema = new mongoose.Schema({
       'confirmed',     // Shop accepted order
       'preparing',     // Shop preparing order
       'ready',         // Order ready for pickup
+      'packed',
+      'pickup',
       'out_for_delivery', // Delivery boy picked up
       'arriving',      // Delivery boy nearby
       'delivered',     // Order delivered
