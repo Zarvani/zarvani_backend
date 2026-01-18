@@ -356,7 +356,7 @@ class CommissionService {
             payment.paymentVerification = {
                 status: 'verified',
                 verifiedAt: new Date(),
-                verifiedBy: adminId,
+                verifiedBy: null,
                 notes: notes || `Paid via ${paymentMethod}`
             };
 
