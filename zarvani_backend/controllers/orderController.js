@@ -6,6 +6,7 @@ const ResponseHandler = require('../utils/responseHandler');
 const OrderService = require('../services/orderService');
 const logger = require('../utils/logger');
 const mongoose = require('mongoose');
+const CacheService = require('../services/cacheService');
 const CacheInvalidationService = require('../services/cacheInvalidationService');
 const { batchLoadAndAttach, batchLoadNested } = require('../utils/batchLoader');
 

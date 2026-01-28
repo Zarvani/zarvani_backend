@@ -4,6 +4,7 @@ const Product = require("../models/Product")
 const ResponseHandler = require('../utils/responseHandler');
 const { deleteFromCloudinary } = require('../middleware/uploadMiddleware');
 const GeoService = require('../services/geoService');
+const CacheService = require('../services/cacheService');
 const CacheInvalidationService = require('../services/cacheInvalidationService');
 const logger = require('../utils/logger');
 
