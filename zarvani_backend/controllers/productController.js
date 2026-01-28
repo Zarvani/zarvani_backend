@@ -2,6 +2,7 @@ const Shop = require('../models/Shop');
 const Product = require('../models/Product');
 const { Order } = require('../models/Order');
 const ResponseHandler = require('../utils/responseHandler');
+const CacheService = require('../services/cacheService');
 const CacheInvalidationService = require('../services/cacheInvalidationService');
 const { batchLoadAndAttach } = require('../utils/batchLoader');
 const logger = require('../utils/logger');

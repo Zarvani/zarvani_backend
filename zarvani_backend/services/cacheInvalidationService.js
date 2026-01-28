@@ -53,9 +53,9 @@ class CacheInvalidationService {
 
         for (const key of cacheKeys) {
             if (key.includes('*')) {
-                await CacheService.deletePattern(key);
+                await CacheService.delPattern(key);
             } else {
-                await CacheService.delete(key);
+                await CacheService.del(key);
             }
         }
 
@@ -73,12 +73,12 @@ class CacheInvalidationService {
 
             // Invalidate shop's product cache
             if (product.shop) {
-                await CacheService.invalidateShop(product.shop);
+                await CacheService.delPattern(`shop:${product.shop}:*`);
             }
 
             // Invalidate specific product cache
             if (product._id) {
-                await CacheService.invalidateProduct(product._id);
+                await CacheService.delPattern(`product:${product._id}*`);
             }
 
             logger.debug(`Cache invalidated for product ${product._id}`);
@@ -102,9 +102,9 @@ class CacheInvalidationService {
 
         for (const key of cacheKeys) {
             if (key.includes('*')) {
-                await CacheService.deletePattern(key);
+                await CacheService.delPattern(key);
             } else {
-                await CacheService.delete(key);
+                await CacheService.del(key);
             }
         }
 
@@ -128,7 +128,7 @@ class CacheInvalidationService {
         const keysToInvalidate = patterns[type] || patterns.all;
 
         for (const pattern of keysToInvalidate) {
-            await CacheService.deletePattern(pattern);
+            await CacheService.delPattern(pattern);
         }
 
         logger.debug(`Cache invalidated for shop ${id} (type: ${type})`);
@@ -141,7 +141,7 @@ class CacheInvalidationService {
     static async invalidateUser(userId) {
         const id = typeof userId === 'object' ? userId._id : userId;
 
-        await CacheService.deletePattern(`user:${id}:*`);
+        await CacheService.delPattern(`user:${id}:*`);
         logger.debug(`Cache invalidated for user ${id}`);
     }
 
@@ -152,7 +152,7 @@ class CacheInvalidationService {
     static async invalidateProvider(providerId) {
         const id = typeof providerId === 'object' ? providerId._id : providerId;
 
-        await CacheService.deletePattern(`provider:${id}:*`);
+        await CacheService.delPattern(`provider:${id}:*`);
         logger.debug(`Cache invalidated for provider ${id}`);
     }
 }
