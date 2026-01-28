@@ -9,7 +9,8 @@ const SMSService = require('../services/smsService');
 const ResponseHandler = require('../utils/responseHandler');
 const getAddressFromCoords = require('../utils/getAddressFromCoords')
 const logger = require('../utils/logger');
-const redisClient = require("../config/passport")
+const redisClient = require("../config/passport");
+const otpQueue = require('../queues/otpQueue');
 // Generate JWT Token
 const generateToken = (id, role) => {
   return jwt.sign({ id, role }, process.env.JWT_SECRET, {
@@ -36,24 +37,28 @@ exports.sendSignupOTP = async (req, res) => {
     }
 
     const isEmail = identifier.includes("@");
-
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
     // Store OTP in Redis for 10 min
     await redisClient.setEx(`otp:signup:${identifier}`, 600, otp);
 
-    // OTP logging removed for security
+    // ✅ OPTIMIZATION: Queue OTP sending (non-blocking)
+    await otpQueue.add('send-otp', {
+      identifier,
+      otp,
+      name: "New User",
+      type: isEmail ? 'email' : 'sms'
+    }, {
+      priority: 1, // High priority
+      delay: 0 // Send immediately
+    });
 
-    if (isEmail) {
-      await EmailService.sendOTP(identifier, otp, "New User");
-    } else {
-      await SMSService.sendOTP(identifier, otp, "New User");
-    }
+    logger.info(`OTP queued for ${identifier}`);
 
     return ResponseHandler.success(
       res,
       { message: "Signup OTP sent" },
-      "OTP sent"
+      "OTP sent successfully"
     );
 
   } catch (err) {
@@ -65,7 +70,7 @@ exports.sendSignupOTP = async (req, res) => {
 // Send OTP
 exports.sendOTP = async (req, res) => {
   try {
-    const { identifier, role = 'user' } = req.body; // identifier can be email or phone
+    const { identifier, role = 'user' } = req.body;
 
     let Model;
     if (role === 'user') Model = User;
@@ -74,7 +79,7 @@ exports.sendOTP = async (req, res) => {
     else return ResponseHandler.error(res, 'Invalid role', 400);
 
     // Check if identifier is email or phone
-    const isEmail = /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/.test(identifier);
+    const isEmail = /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/.test(identifier);
     const query = isEmail ? { email: identifier } : { phone: identifier };
 
     let user = await Model.findOne(query);
@@ -87,35 +92,63 @@ exports.sendOTP = async (req, res) => {
     const otp = user.generateOTP();
     await user.save();
 
-    // Send OTP via email and/or SMS
+    // ✅ OPTIMIZATION: Queue OTP sending (non-blocking)
     let sentTo = [];
+
     if (isEmail) {
-      await EmailService.sendOTP(identifier, otp, user.name);
+      await otpQueue.add('send-otp', {
+        identifier,
+        otp,
+        name: user.name,
+        type: 'email'
+      }, { priority: 1 });
       sentTo.push('email');
 
       // If user has a phone, send to phone as well
       if (user.phone) {
-        await SMSService.sendOTP(user.phone, otp, user.name);
+        await otpQueue.add('send-otp', {
+          identifier: user.phone,
+          otp,
+          name: user.name,
+          type: 'sms'
+        }, { priority: 1 });
         sentTo.push('phone');
       }
     } else {
-      await SMSService.sendOTP(identifier, otp, user.name);
+      await otpQueue.add('send-otp', {
+        identifier,
+        otp,
+        name: user.name,
+        type: 'sms'
+      }, { priority: 1 });
       sentTo.push('phone');
 
-      // If user has an email, send to email as well
+      // If user has email, send to email as well
       if (user.email) {
-        await EmailService.sendOTP(user.email, otp, user.name);
+        await otpQueue.add('send-otp', {
+          identifier: user.email,
+          otp,
+          name: user.name,
+          type: 'email'
+        }, { priority: 1 });
         sentTo.push('email');
       }
     }
 
-    ResponseHandler.success(res,
-      { message: `OTP sent to ${sentTo.join(' and ')}` },
+    logger.info(`OTP queued for ${identifier} (${sentTo.join(', ')})`);
+
+    return ResponseHandler.success(
+      res,
+      {
+        message: `OTP sent to ${sentTo.join(' and ')}`,
+        sentTo
+      },
       'OTP sent successfully'
     );
+
   } catch (error) {
     logger.error(`Send OTP error: ${error.message}`);
-    ResponseHandler.error(res, error.message, 500);
+    return ResponseHandler.error(res, error.message, 500);
   }
 };
 
@@ -340,15 +373,14 @@ exports.signup = async (req, res) => {
     // --------------------------------------
     // 9️⃣ BACKGROUND TASK — SEND EMAILS
     // --------------------------------------
-    setImmediate(async () => {
-      try {
-        if (email) {
-          await EmailService.sendWelcomeEmail(email, name, role);
-        }
-      } catch (err) {
-        console.error("Email sending failed:", err.message);
-      }
-    });
+    // ✅ OPTIMIZATION: Queue welcome email (non-blocking)
+    if (email) {
+      await otpQueue.add('send-welcome-email', {
+        email,
+        name,
+        role
+      }, { priority: 2 }); // Lower priority than OTP
+    }
 
   } catch (err) {
     logger.error(`Signup error: ${err.message}`);
@@ -377,44 +409,101 @@ exports.signup = async (req, res) => {
 };
 
 
-
 exports.verifySignupOTP = async (req, res) => {
   try {
-    const { identifier, otp } = req.body;
+    const { identifier, otp, name, role = 'user', password, ...otherData } = req.body;
 
-    // Validate inputs
-    if (!identifier || typeof identifier !== "string") {
-      return ResponseHandler.error(res, "Identifier is required", 400);
+    // Validate required fields
+    if (!identifier || !otp || !name) {
+      return ResponseHandler.error(res, "Identifier, OTP, and name are required", 400);
     }
 
-    if (!otp || typeof otp !== "string") {
-      return ResponseHandler.error(res, "OTP is required", 400);
+    // Verify OTP from Redis
+    const storedOTP = await redisClient.get(`otp:signup:${identifier}`);
+
+    if (!storedOTP) {
+      return ResponseHandler.error(res, "OTP expired or invalid", 400);
     }
 
-    const storedOtp = await redisClient.get(`otp:signup:${identifier}`);
-
-    if (!storedOtp) {
-      return ResponseHandler.error(res, "OTP expired or not found", 400);
-    }
-
-    if (storedOtp !== otp) {
+    if (storedOTP !== otp) {
       return ResponseHandler.error(res, "Invalid OTP", 400);
     }
 
-    // Delete OTP after successful verification
+    // Delete OTP after verification
     await redisClient.del(`otp:signup:${identifier}`);
+
+    // Determine model based on role
+    let Model;
+    if (role === 'user') Model = User;
+    else if (role === 'provider') Model = ServiceProvider;
+    else if (role === 'shop') Model = Shop;
+    else return ResponseHandler.error(res, 'Invalid role', 400);
+
+    const isEmail = identifier.includes("@");
+    const query = isEmail ? { email: identifier } : { phone: identifier };
+
+    // Check if user already exists
+    let user = await Model.findOne(query);
+    if (user) {
+      return ResponseHandler.error(res, "User already exists", 400);
+    }
+
+    // Create new user
+    const userData = {
+      name,
+      ...otherData
+    };
+
+    if (isEmail) {
+      userData.email = identifier;
+    } else {
+      userData.phone = identifier;
+    }
+
+    if (password) {
+      userData.password = password;
+    }
+
+    user = await Model.create(userData);
+
+    // Generate tokens
+    const token = generateToken(user._id, role);
+    const refreshToken = generateRefreshToken(user._id, role);
+
+    // ✅ OPTIMIZATION: Queue welcome email (non-blocking)
+    if (user.email) {
+      await otpQueue.add('send-welcome-email', {
+        email: user.email,
+        name: user.name,
+        role
+      }, { priority: 2 }); // Lower priority than OTP
+    }
+
+    logger.info(`User ${user._id} signed up successfully`);
 
     return ResponseHandler.success(
       res,
-      { verified: true },
-      "OTP verified successfully"
+      {
+        user: {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          phone: user.phone,
+          role
+        },
+        token,
+        refreshToken
+      },
+      "Signup successful",
+      201
     );
 
-  } catch (err) {
-    logger.error(`OTP Verify Error: ${err.message}`);
-    return ResponseHandler.error(res, err.message, 500);
+  } catch (error) {
+    logger.error(`Verify signup OTP error: ${error.message}`);
+    return ResponseHandler.error(res, error.message, 500);
   }
 };
+
 
 
 // Verify OTP

@@ -4,6 +4,8 @@ const ResponseHandler = require('../utils/responseHandler');
 const BookingService = require('../services/bookingService');
 const logger = require('../utils/logger');
 const mongoose = require("mongoose");
+const CacheInvalidationService = require('../services/cacheInvalidationService');
+const { batchLoadAndAttach } = require('../utils/batchLoader');
 
 // ========================== CREATE BOOKING ==========================
 exports.createBooking = async (req, res) => {
@@ -97,7 +99,7 @@ async function searchAndNotifyProviders(booking) {
         );
 
         // Calculate estimated arrival time
-        const estimatedTime = calculateEstimatedTime(distance);
+        const estimatedTime = BookingService.calculateEstimatedTime(distance);
 
         // Calculate acceptance rate
         const providerStats = await Booking.aggregate([
@@ -267,7 +269,7 @@ exports.updateProviderLocation = async (req, res) => {
     booking.tracking.distance = distance;
 
     // Estimate arrival time
-    const durationMinutes = calculateEstimatedTime(distance);
+    const durationMinutes = BookingService.calculateEstimatedTime(distance);
     booking.tracking.duration = Math.round(durationMinutes);
     booking.tracking.estimatedArrival = new Date(Date.now() + durationMinutes * 60000);
 
@@ -480,6 +482,16 @@ exports.getPendingRequests = async (req, res) => {
   try {
     const providerId = req.user._id;
 
+    // Cache key
+    const cacheKey = `provider:${providerId}:pending-requests`;
+
+    // Try cache (30 second TTL for real-time data)
+    const cached = await CacheService.get(cacheKey);
+    if (cached) {
+      logger.debug(`Cache HIT: Pending requests for ${providerId}`);
+      return ResponseHandler.success(res, cached, 'Pending requests fetched from cache');
+    }
+
     // Find provider with location
     const provider = await ServiceProvider.findById(providerId).lean();
     if (!provider) {
@@ -497,27 +509,44 @@ exports.getPendingRequests = async (req, res) => {
 
     const providerLocation = provider.address.location.coordinates;
 
-    // ⚡ IMPORTANT: Only show bookings that are still searching
+    // Use .lean() for faster queries
     const bookings = await Booking.find({
-      status: "searching", // Only searching bookings
+      status: "searching",
       "notifiedProviders.provider": providerId,
       "notifiedProviders.response": "pending"
     })
-      .populate("user", "name phone profilePicture")
-      .populate("service", "title category pricing duration")
-      .sort({ createdAt: -1 })
-      .lean();
+      .lean()
+      .sort({ createdAt: -1 });
 
-    // No bookings → return empty response
     if (!bookings.length) {
-      return ResponseHandler.success(res, { bookings: [], providerLocation }, "No pending requests found");
+      const emptyResponse = { bookings: [], providerLocation };
+      await CacheService.set(cacheKey, emptyResponse, 30);
+      return ResponseHandler.success(res, emptyResponse, "No pending requests found");
     }
 
+    // Batch load users
+    await batchLoadAndAttach(
+      bookings,
+      'user',
+      require('../models/User'),
+      'user',
+      'name phone profilePicture'
+    );
+
+    // Batch load services
+    await batchLoadAndAttach(
+      bookings,
+      'service',
+      Service,
+      'service',
+      'title category pricing duration'
+    );
+
     // Enhance booking data
+    const GeoService = require('../services/geoService');
     const enhancedBookings = bookings.map((booking) => {
       const userLocation = booking.address?.location?.coordinates || [0, 0];
 
-      // Distance calculation
       let distance = 0;
       try {
         distance = GeoService.calculateDistance(
@@ -528,21 +557,17 @@ exports.getPendingRequests = async (req, res) => {
         distance = 0;
       }
 
-      // ETA Calculation
-      const estimatedTime = calculateEstimatedTime(distance);
+      const estimatedTime = BookingService.calculateEstimatedTime(distance);
 
-      // Find provider notification details
       const notify = booking.notifiedProviders.find(
         (np) => np.provider.toString() === providerId.toString()
       );
 
-      // ⚡ NO TIME REMAINING - Can accept anytime
       const notifiedAt = new Date(notify?.notifiedAt || new Date());
       const now = new Date();
-      const timeElapsed = (now - notifiedAt) / 1000; // in seconds
+      const timeElapsed = (now - notifiedAt) / 1000;
       const timeElapsedMinutes = Math.floor(timeElapsed / 60);
 
-      // Format address
       const formattedAddress = booking.address?.addressLine1
         ? `${booking.address.addressLine1}, ${booking.address.city}`
         : booking.address?.city || "Unknown Location";
@@ -552,16 +577,17 @@ exports.getPendingRequests = async (req, res) => {
         distance: distance.toFixed(1),
         estimatedTime,
         formattedAddress,
-        timeElapsed: timeElapsedMinutes, // Show how long it's been searching
+        timeElapsed: timeElapsedMinutes,
         urgency: distance < 3 ? "high" : distance < 10 ? "medium" : "low"
       };
     });
 
-    return ResponseHandler.success(
-      res,
-      { bookings: enhancedBookings, providerLocation },
-      "Pending requests fetched"
-    );
+    const response = { bookings: enhancedBookings, providerLocation };
+
+    // Cache for 30 seconds (real-time data)
+    await CacheService.set(cacheKey, response, 30);
+
+    return ResponseHandler.success(res, response, "Pending requests fetched");
 
   } catch (error) {
     logger.error(`Get pending requests error: ${error.message}`);
@@ -710,6 +736,9 @@ exports.cancelBooking = async (req, res) => {
 
     await booking.save();
 
+    // Invalidate cache
+    await CacheInvalidationService.invalidateBooking(booking).catch(e => logger.error(`Cache invalidation error: ${e.message}`));
+
     // Notify all pending providers
     const pendingProviders = booking.notifiedProviders.filter(np => np.response === 'pending');
 
@@ -757,6 +786,18 @@ exports.getUserBookings = async (req, res) => {
     const userId = req.user._id;
     const { status, page = 1, limit = 10, sortBy = 'createdAt', order = 'desc' } = req.query;
 
+    // Build cache key
+    const cacheKey = CacheService.userKey(userId, `bookings:${status || 'all'}:p${page}`);
+
+    // Try cache first (for first page only)
+    if (page == 1) {
+      const cached = await CacheService.get(cacheKey);
+      if (cached) {
+        logger.debug(`Cache HIT: User bookings for ${userId}`);
+        return ResponseHandler.success(res, cached, 'Bookings fetched from cache');
+      }
+    }
+
     const query = { user: userId };
     if (status) {
       query.status = status;
@@ -765,16 +806,34 @@ exports.getUserBookings = async (req, res) => {
     const skip = (page - 1) * limit;
     const sortOrder = order === 'asc' ? 1 : -1;
 
+    // OPTIMIZATION 1: Use .lean() for faster queries
     const bookings = await Booking.find(query)
-      .populate('service', 'title category pricing')
-      .populate('provider', 'name phone profilePicture ratings')
+      .lean()
       .sort({ [sortBy]: sortOrder })
       .skip(skip)
       .limit(parseInt(limit));
 
+    // OPTIMIZATION 2: Batch load services (1 query instead of N)
+    await batchLoadAndAttach(
+      bookings,
+      'service',
+      Service,
+      'service',
+      'title category pricing'
+    );
+
+    // OPTIMIZATION 3: Batch load providers (1 query instead of N)
+    await batchLoadAndAttach(
+      bookings,
+      'provider',
+      ServiceProvider,
+      'provider',
+      'name phone profilePicture ratings'
+    );
+
     const total = await Booking.countDocuments(query);
 
-    ResponseHandler.success(res, {
+    const response = {
       bookings,
       pagination: {
         total,
@@ -782,7 +841,14 @@ exports.getUserBookings = async (req, res) => {
         pages: Math.ceil(total / limit),
         limit: parseInt(limit)
       }
-    }, 'Bookings fetched successfully');
+    };
+
+    // Cache for 2 minutes (first page only)
+    if (page == 1) {
+      await CacheService.set(cacheKey, response, 120);
+    }
+
+    ResponseHandler.success(res, response, 'Bookings fetched successfully');
   } catch (error) {
     logger.error(`Get user bookings error: ${error.message}`);
     ResponseHandler.error(res, error.message, 500);
@@ -795,6 +861,18 @@ exports.getProviderBookings = async (req, res) => {
     const providerId = req.user._id;
     const { status, page = 1, limit = 10, sortBy = 'createdAt', order = 'desc' } = req.query;
 
+    // Build cache key
+    const cacheKey = `provider:${providerId}:bookings:${status || 'all'}:p${page}`;
+
+    // Try cache first
+    if (page == 1) {
+      const cached = await CacheService.get(cacheKey);
+      if (cached) {
+        logger.debug(`Cache HIT: Provider bookings for ${providerId}`);
+        return ResponseHandler.success(res, cached, 'Bookings fetched from cache');
+      }
+    }
+
     const query = { provider: providerId };
     if (status) {
       query.status = status;
@@ -803,16 +881,34 @@ exports.getProviderBookings = async (req, res) => {
     const skip = (page - 1) * limit;
     const sortOrder = order === 'asc' ? 1 : -1;
 
+    // Use .lean() for faster queries
     const bookings = await Booking.find(query)
-      .populate('user', 'name phone address')
-      .populate('service', 'title category pricing')
+      .lean()
       .sort({ [sortBy]: sortOrder })
       .skip(skip)
       .limit(parseInt(limit));
 
+    // Batch load users
+    await batchLoadAndAttach(
+      bookings,
+      'user',
+      require('../models/User'),
+      'user',
+      'name phone address'
+    );
+
+    // Batch load services
+    await batchLoadAndAttach(
+      bookings,
+      'service',
+      Service,
+      'service',
+      'title category pricing'
+    );
+
     const total = await Booking.countDocuments(query);
 
-    ResponseHandler.success(res, {
+    const response = {
       bookings,
       pagination: {
         total,
@@ -820,7 +916,14 @@ exports.getProviderBookings = async (req, res) => {
         pages: Math.ceil(total / limit),
         limit: parseInt(limit)
       }
-    }, 'Bookings fetched successfully');
+    };
+
+    // Cache for 1 minute
+    if (page == 1) {
+      await CacheService.set(cacheKey, response, 60);
+    }
+
+    ResponseHandler.success(res, response, 'Provider bookings fetched successfully');
   } catch (error) {
     logger.error(`Get provider bookings error: ${error.message}`);
     ResponseHandler.error(res, error.message, 500);
@@ -969,7 +1072,7 @@ exports.getBookingAcceptanceStatus = async (req, res) => {
           userLocation[0]
         );
 
-        const estimatedTime = calculateEstimatedTime(distance);
+        const estimatedTime = BookingService.calculateEstimatedTime(distance);
 
         acceptanceInfo = {
           status: 'provider_accepted',
@@ -1205,24 +1308,47 @@ exports.resendProviderNotifications = async (req, res) => {
 
 // Calculate estimated arrival time based on distance and traffic
 function calculateEstimatedTime(distance) {
-  // Base time calculation (30 km/h average speed)
-  const baseTime = (distance / 30) * 60; // in minutes
-
-  // Add traffic factor (random between 1.2 to 1.8)
-  const trafficFactor = 1.2 + Math.random() * 0.6;
-
-  // Add pickup preparation time (2-5 minutes)
-  const preparationTime = 2 + Math.random() * 3;
-
-  return Math.ceil(baseTime * trafficFactor + preparationTime);
+  // Assume average speed of 30 km/h in city
+  const avgSpeed = 30;
+  const timeInHours = distance / avgSpeed;
+  const timeInMinutes = timeInHours * 60;
+  return Math.ceil(timeInMinutes);
 }
 
 // Calculate estimated arrival datetime
 function calculateEstimatedArrivalTime(distance) {
-  const estimatedMinutes = calculateEstimatedTime(distance);
+  const estimatedMinutes = BookingService.calculateEstimatedTime(distance);
   const arrivalTime = new Date();
   arrivalTime.setMinutes(arrivalTime.getMinutes() + estimatedMinutes);
   return arrivalTime;
 }
+
+async function invalidateBookingCache(booking) {
+  try {
+    // Invalidate user's booking cache
+    if (booking.user) {
+      await CacheService.delPattern(`user:${booking.user}:bookings:*`);
+    }
+
+    // Invalidate provider's booking cache
+    if (booking.provider) {
+      await CacheService.delPattern(`provider:${booking.provider}:bookings:*`);
+      await CacheService.delPattern(`provider:${booking.provider}:pending-requests`);
+    }
+
+    // Invalidate all notified providers' pending requests
+    if (booking.notifiedProviders && booking.notifiedProviders.length > 0) {
+      await Promise.all(
+        booking.notifiedProviders.map(np =>
+          CacheService.del(`provider:${np.provider}:pending-requests`)
+        )
+      );
+    }
+  } catch (error) {
+    logger.error(`Cache invalidation error: ${error.message}`);
+  }
+}
+
+module.exports.invalidateBookingCache = invalidateBookingCache;
 
 module.exports = exports;

@@ -85,17 +85,50 @@ app.use(morgan('combined', { stream: { write: message => logger.info(message.tri
  * @swagger
  * /health:
  *   get:
- *     summary: Health check endpoint
+ *     summary: Health check endpoint with dependency verification
  *     responses:
  *       200:
- *         description: Server is healthy
+ *         description: Server and all dependencies are healthy
+ *       503:
+ *         description: Server is degraded or down
  */
-app.get('/health', (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: 'Server is running',
-    timestamp: new Date().toISOString()
-  });
+app.get('/health', async (req, res) => {
+  const health = {
+    uptime: process.uptime(),
+    timestamp: Date.now(),
+    status: 'OK',
+    services: {}
+  };
+
+  try {
+    // Check MongoDB
+    const mongoose = require('mongoose');
+    if (mongoose.connection.readyState === 1) {
+      await mongoose.connection.db.admin().ping();
+      health.services.mongodb = 'UP';
+    } else {
+      health.services.mongodb = 'DOWN';
+      health.status = 'DEGRADED';
+    }
+  } catch (err) {
+    health.services.mongodb = 'DOWN';
+    health.status = 'DEGRADED';
+    logger.error(`MongoDB health check failed: ${err.message}`);
+  }
+
+  try {
+    // Check Redis
+    const redisClient = require('./config/redis');
+    await redisClient.ping();
+    health.services.redis = 'UP';
+  } catch (err) {
+    health.services.redis = 'DOWN';
+    health.status = 'DEGRADED';
+    logger.error(`Redis health check failed: ${err.message}`);
+  }
+
+  const statusCode = health.status === 'OK' ? 200 : 503;
+  res.status(statusCode).json(health);
 });
 
 // Swagger UI
