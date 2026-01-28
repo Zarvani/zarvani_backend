@@ -4,6 +4,7 @@ const Product = require("../models/Product")
 const ResponseHandler = require('../utils/responseHandler');
 const { deleteFromCloudinary } = require('../middleware/uploadMiddleware');
 const GeoService = require('../services/geoService');
+const CacheInvalidationService = require('../services/cacheInvalidationService');
 const logger = require('../utils/logger');
 
 // Get Shop Profile
@@ -516,19 +517,48 @@ exports.addProduct = async (req, res) => {
 exports.getMyProducts = async (req, res) => {
   try {
     const { page = 1, limit = 20, search, category } = req.query;
+    const shopId = req.user._id;
 
-    const query = { shop: req.user._id };
+    // Build cache key
+    const cacheKey = `shop:${shopId}:products:${search || ''}:${category || ''}:p${page}`;
+
+    // Try cache first
+    if (page == 1) {
+      const cached = await CacheService.get(cacheKey);
+      if (cached) {
+        logger.debug(`Cache HIT: Shop products for ${shopId}`);
+        return ResponseHandler.success(res, cached, 'Products fetched from cache');
+      }
+    }
+
+    const query = { shop: shopId };
     if (search) query.name = { $regex: search, $options: 'i' };
     if (category) query.category = category;
 
     const products = await Product.find(query)
+      .lean()
       .limit(limit * 1)
       .skip((page - 1) * limit)
       .sort({ createdAt: -1 });
 
     const count = await Product.countDocuments(query);
 
-    ResponseHandler.paginated(res, products, page, limit, count);
+    const response = {
+      products,
+      pagination: {
+        currentPage: parseInt(page),
+        totalPages: Math.ceil(count / limit),
+        totalItems: count,
+        itemsPerPage: parseInt(limit)
+      }
+    };
+
+    // Cache for 5 minutes
+    if (page == 1) {
+      await CacheService.set(cacheKey, response, 300);
+    }
+
+    ResponseHandler.success(res, response, 'Products fetched successfully');
   } catch (error) {
     logger.error(`Get shop products error: ${error.message}`);
     ResponseHandler.error(res, error.message, 500);
@@ -602,28 +632,102 @@ exports.deleteProduct = async (req, res) => {
   }
 };
 
-// Get Orders
 exports.getOrders = async (req, res) => {
   try {
     const { page = 1, limit = 20, status } = req.query;
-    const Booking = require('../models/Booking');
+    const shopId = req.user._id;
+
+    // Build cache key
+    const cacheKey = `shop:${shopId}:orders:${status || 'all'}:p${page}`;
+
+    // Try cache first (for first page only)
+    if (page == 1) {
+      const cached = await CacheService.get(cacheKey);
+      if (cached) {
+        logger.debug(`Cache HIT: Shop orders for ${shopId}`);
+        return ResponseHandler.success(res, cached, 'Orders fetched from cache');
+      }
+    }
 
     const query = {
-      'products.shop': req.user._id
+      'products.shop': shopId
     };
 
     if (status) query.status = status;
 
+    const skip = (page - 1) * limit;
+
+    // OPTIMIZATION 1: Use .lean() for faster queries
     const orders = await Booking.find(query)
-      .populate('user')
-      .populate('products.product')
+      .lean()
       .limit(limit * 1)
-      .skip((page - 1) * limit)
+      .skip(skip)
       .sort({ createdAt: -1 });
+
+    // OPTIMIZATION 2: Batch load users (1 query instead of N)
+    await batchLoadAndAttach(
+      orders,
+      'user',
+      require('../models/User'),
+      'user',
+      'name email phone profilePicture'
+    );
+
+    // OPTIMIZATION 3: Batch load products for all orders
+    // First, collect all product IDs from all orders
+    const allProductIds = [];
+    orders.forEach(order => {
+      if (order.products && Array.isArray(order.products)) {
+        order.products.forEach(p => {
+          if (p.product) allProductIds.push(p.product);
+        });
+      }
+    });
+
+    // Batch load all products at once
+    if (allProductIds.length > 0) {
+      const Product = require('../models/Product');
+      const uniqueProductIds = [...new Set(allProductIds.map(id => id.toString()))];
+      const products = await Product.find({
+        _id: { $in: uniqueProductIds }
+      }).lean();
+
+      // Create a map for O(1) lookup
+      const productMap = {};
+      products.forEach(product => {
+        productMap[product._id.toString()] = product;
+      });
+
+      // Attach products to orders
+      orders.forEach(order => {
+        if (order.products && Array.isArray(order.products)) {
+          order.products.forEach(p => {
+            if (p.product && productMap[p.product.toString()]) {
+              p.product = productMap[p.product.toString()];
+            }
+          });
+        }
+      });
+    }
 
     const count = await Booking.countDocuments(query);
 
-    ResponseHandler.paginated(res, orders, page, limit, count);
+    const response = {
+      orders,
+      pagination: {
+        currentPage: parseInt(page),
+        totalPages: Math.ceil(count / limit),
+        totalItems: count,
+        itemsPerPage: parseInt(limit)
+      }
+    };
+
+    // Cache for 2 minutes (first page only)
+    if (page == 1) {
+      await CacheService.set(cacheKey, response, 120);
+    }
+
+    ResponseHandler.success(res, response, 'Orders fetched successfully');
   } catch (error) {
     logger.error(`Get shop orders error: ${error.message}`);
     ResponseHandler.error(res, error.message, 500);
@@ -670,3 +774,4 @@ exports.updateOrderStatus = async (req, res) => {
   }
 };
 
+// Cache invalidation now handled by CacheInvalidationService
