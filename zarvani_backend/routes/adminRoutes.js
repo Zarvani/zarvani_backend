@@ -27,7 +27,7 @@ router.put('/shops/:id/reject', adminController.rejectShop);
 
 // Booking Management
 router.get('/bookings', adminController.getAllBookings);
-router.get('/bookings/:id', adminController.getBookingDetails);
+router.get('/bookings/:id', adminController.getAdminBookingDetails);
 
 // Analytics
 router.get('/analytics/dashboard', adminController.getDashboardStats);

@@ -5,6 +5,7 @@ const Shop = require('../models/Shop');
 const User = require('../models/User');
 const GeoService = require('./geoService');
 const NotificationService = require('./notificationService');
+const CacheInvalidationService = require('./cacheInvalidationService');
 const mongoose = require('mongoose');
 const logger = require('../utils/logger');
 
@@ -154,7 +155,10 @@ class OrderService {
             await order.save({ session });
             await session.commitTransaction();
 
-            // 7. Trigger Notifications
+            // 7. Invalidate order cache
+            await CacheInvalidationService.invalidateOrder(order).catch(e => logger.error(`Cache invalidation error: ${e.message}`));
+
+            // 8. Trigger Notifications
             NotificationService.send({
                 recipient: shopId,
                 recipientType: 'Shop',
@@ -182,6 +186,9 @@ class OrderService {
         if (status === 'confirmed') order.timestamps.confirmedAt = new Date();
 
         await order.save();
+
+        // Invalidate cache
+        await this.invalidateOrderCache(order).catch(e => logger.error(`Cache invalidation error: ${e.message}`));
 
         NotificationService.send({
             recipient: order.user,
@@ -220,6 +227,9 @@ class OrderService {
 
             await order.save({ session });
             await session.commitTransaction();
+
+            // Invalidate cache
+            await this.invalidateOrderCache(order).catch(e => logger.error(`Cache invalidation error: ${e.message}`));
 
             NotificationService.send({
                 recipient: order.user,
@@ -266,6 +276,9 @@ class OrderService {
             await order.save({ session });
             await session.commitTransaction();
 
+            // Invalidate cache
+            await this.invalidateOrderCache(order).catch(e => logger.error(`Cache invalidation error: ${e.message}`));
+
             NotificationService.send({
                 recipient: order.user,
                 recipientType: 'User',
@@ -283,6 +296,8 @@ class OrderService {
             session.endSession();
         }
     }
+
+    // Cache invalidation now handled by CacheInvalidationService
 }
 
 module.exports = OrderService;

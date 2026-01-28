@@ -1,41 +1,71 @@
 const { createClient } = require("redis");
+const logger = require("../utils/logger");
+const CacheService = require("../services/cacheService");
 
 const redisClient = createClient({
   url: "redis://localhost:6379",
   socket: {
-    connectTimeout: 20000,   // ⬅ Important: Prevents early timeout
-    keepAlive: 5000,
     reconnectStrategy: (retries) => {
-      console.log(`🔄 Redis reconnect attempt #${retries}`);
-      return Math.min(retries * 100, 3000); // retry every 0.1 → 3 sec
+      if (retries > 10) {
+        logger.error("❌ Redis max reconnection attempts reached");
+        return new Error("Max reconnection attempts reached");
+      }
+      logger.info(`🔄 Redis reconnect attempt #${retries}`);
+      return Math.min(retries * 100, 3000);
     },
+    connectTimeout: 10000,
+    keepAlive: 5000,
   },
+  // Connection pool settings for high concurrency
+  maxRetriesPerRequest: 3,
 });
 
-// Error listener
 redisClient.on("error", (err) => {
-  console.error("❌ Redis error:", err.message);
+  logger.error(`❌ Redis error: ${err.message}`);
 });
 
-// Successful connection listener
 redisClient.on("connect", () => {
-  console.log("🔗 Redis client connected …");
+  logger.info("🔗 Redis client connected");
 });
 
 redisClient.on("ready", () => {
-  console.log("✅ Redis ready for commands");
+  logger.info("✅ Redis ready for commands");
+
+  // Initialize cache service with Redis client
+  CacheService.initialize(redisClient);
 });
 
-// 👇 Safe connect function with retry wrapper
+redisClient.on("reconnecting", () => {
+  logger.warn("⚠️ Redis reconnecting...");
+});
+
+redisClient.on("end", () => {
+  logger.warn("⚠️ Redis connection closed");
+});
+
 const connectRedis = async () => {
   try {
     await redisClient.connect();
-    console.log("🚀 Redis connected successfully");
+    logger.info("🚀 Redis connected successfully");
   } catch (err) {
-    console.error("❌ Initial Redis connection failed. Retrying in 3 seconds…");
+    logger.error(`❌ Initial Redis connection failed: ${err.message}`);
+    logger.info("Retrying in 3 seconds…");
     setTimeout(connectRedis, 3000);
   }
 };
+
+// Graceful shutdown
+process.on("SIGINT", async () => {
+  logger.info("🛑 Closing Redis connection...");
+  await redisClient.quit();
+  process.exit(0);
+});
+
+process.on("SIGTERM", async () => {
+  logger.info("🛑 Closing Redis connection...");
+  await redisClient.quit();
+  process.exit(0);
+});
 
 connectRedis();
 

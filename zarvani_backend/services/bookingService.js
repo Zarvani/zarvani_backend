@@ -5,6 +5,7 @@ const { Service } = require("../models/Service");
 const Product = require("../models/Product");
 const NotificationService = require('./notificationService');
 const GeoService = require('./geoService');
+const CacheService = require('./cacheService');
 const mongoose = require('mongoose');
 const logger = require('../utils/logger');
 

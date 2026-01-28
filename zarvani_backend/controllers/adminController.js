@@ -1,11 +1,11 @@
 // ============= controllers/adminController.js =============
 const User = require('../models/User');
 const ServiceProvider = require('../models/ServiceProvider');
-const Shop  = require('../models/Shop');
-const Booking =require("../models/Booking")
+const Shop = require('../models/Shop');
+const Booking = require("../models/Booking")
 const Payment = require("../models/Payment");
-const { Service } =require("../models/Service")
-const Product  =require("../models/Product")
+const { Service } = require("../models/Service")
+const Product = require("../models/Product")
 const ResponseHandler = require('../utils/responseHandler');
 const EmailService = require('../services/emailService');
 const { Admin } = require('../models/Admin');
@@ -27,7 +27,7 @@ exports.createAdmin = async (req, res) => {
 exports.getAllUsers = async (req, res) => {
   try {
     const { page = 1, limit = 20, search, isActive } = req.query;
-    
+
     const query = {};
     if (search) {
       query.$or = [
@@ -37,15 +37,15 @@ exports.getAllUsers = async (req, res) => {
       ];
     }
     if (isActive !== undefined) query.isActive = isActive === 'true';
-    
+
     const users = await User.find(query)
       .select('-password -otp')
       .limit(limit * 1)
       .skip((page - 1) * limit)
       .sort({ createdAt: -1 });
-    
+
     const count = await User.countDocuments(query);
-    
+
     ResponseHandler.paginated(res, users, page, limit, count);
   } catch (error) {
     logger.error(`Get all users error: ${error.message}`);
@@ -57,7 +57,7 @@ exports.getAllUsers = async (req, res) => {
 exports.getAllProviders = async (req, res) => {
   try {
     const { page = 1, limit = 20, verificationStatus, search } = req.query;
-    
+
     const query = {};
     if (verificationStatus) query.verificationStatus = verificationStatus;
     if (search) {
@@ -67,15 +67,15 @@ exports.getAllProviders = async (req, res) => {
         { phone: { $regex: search, $options: 'i' } }
       ];
     }
-    
+
     const providers = await ServiceProvider.find(query)
       .select('-password -otp')
       .limit(limit * 1)
       .skip((page - 1) * limit)
       .sort({ createdAt: -1 });
-    
+
     const count = await ServiceProvider.countDocuments(query);
-    
+
     ResponseHandler.paginated(res, providers, page, limit, count);
   } catch (error) {
     logger.error(`Get all providers error: ${error.message}`);
@@ -87,7 +87,7 @@ exports.getAllProviders = async (req, res) => {
 exports.verifyProvider = async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     const provider = await ServiceProvider.findByIdAndUpdate(
       id,
       {
@@ -99,11 +99,11 @@ exports.verifyProvider = async (req, res) => {
       },
       { new: true }
     );
-    
+
     if (!provider) {
       return ResponseHandler.error(res, 'Provider not found', 404);
     }
-    
+
     // Send approval email
     if (provider.email) {
       await EmailService.sendEmail(
@@ -112,7 +112,7 @@ exports.verifyProvider = async (req, res) => {
         `<p>Congratulations ${provider.name}! Your service provider account has been approved.</p>`
       );
     }
-    
+
     ResponseHandler.success(res, { provider }, 'Provider verified successfully');
   } catch (error) {
     logger.error(`Verify provider error: ${error.message}`);
@@ -125,7 +125,7 @@ exports.rejectProvider = async (req, res) => {
   try {
     const { id } = req.params;
     const { reason } = req.body;
-    
+
     const provider = await ServiceProvider.findByIdAndUpdate(
       id,
       {
@@ -135,11 +135,11 @@ exports.rejectProvider = async (req, res) => {
       },
       { new: true }
     );
-    
+
     if (!provider) {
       return ResponseHandler.error(res, 'Provider not found', 404);
     }
-    
+
     // Send rejection email
     if (provider.email) {
       await EmailService.sendEmail(
@@ -148,7 +148,7 @@ exports.rejectProvider = async (req, res) => {
         `<p>Dear ${provider.name}, your application has been rejected. Reason: ${reason}</p>`
       );
     }
-    
+
     ResponseHandler.success(res, { provider }, 'Provider rejected');
   } catch (error) {
     logger.error(`Reject provider error: ${error.message}`);
@@ -160,23 +160,23 @@ exports.rejectProvider = async (req, res) => {
 exports.getDashboardStats = async (req, res) => {
   try {
     const totalUsers = await User.countDocuments({ isActive: true });
-    const totalProviders = await ServiceProvider.countDocuments({ 
+    const totalProviders = await ServiceProvider.countDocuments({
       verificationStatus: 'approved',
-      isActive: true 
+      isActive: true
     });
-    const totalShops = await Shop.countDocuments({ 
+    const totalShops = await Shop.countDocuments({
       verificationStatus: 'approved',
-      isActive: true 
+      isActive: true
     });
     const totalBookings = await Booking.countDocuments();
     const pendingBookings = await Booking.countDocuments({ status: 'pending' });
     const completedBookings = await Booking.countDocuments({ status: 'completed' });
-    
+
     const totalRevenue = await Payment.aggregate([
       { $match: { status: 'success' } },
       { $group: { _id: null, total: { $sum: '$amount' } } }
     ]);
-    
+
     const monthlyRevenue = await Payment.aggregate([
       {
         $match: {
@@ -188,7 +188,7 @@ exports.getDashboardStats = async (req, res) => {
       },
       { $group: { _id: null, total: { $sum: '$amount' } } }
     ]);
-    
+
     const stats = {
       totalUsers,
       totalProviders,
@@ -199,9 +199,9 @@ exports.getDashboardStats = async (req, res) => {
       totalRevenue: totalRevenue[0]?.total || 0,
       monthlyRevenue: monthlyRevenue[0]?.total || 0,
       pendingVerifications: await ServiceProvider.countDocuments({ verificationStatus: 'pending' }) +
-                           await Shop.countDocuments({ verificationStatus: 'pending' })
+        await Shop.countDocuments({ verificationStatus: 'pending' })
     };
-    
+
     ResponseHandler.success(res, stats, 'Dashboard stats fetched successfully');
   } catch (error) {
     logger.error(`Get dashboard stats error: ${error.message}`);
@@ -213,10 +213,10 @@ exports.getDashboardStats = async (req, res) => {
 exports.getRevenueStats = async (req, res) => {
   try {
     const { period = 'month' } = req.query;
-    
+
     let startDate;
     const now = new Date();
-    
+
     if (period === 'week') {
       startDate = new Date(now.setDate(now.getDate() - 7));
     } else if (period === 'month') {
@@ -224,7 +224,7 @@ exports.getRevenueStats = async (req, res) => {
     } else if (period === 'year') {
       startDate = new Date(now.getFullYear(), 0, 1);
     }
-    
+
     const revenue = await Payment.aggregate([
       {
         $match: {
@@ -243,7 +243,7 @@ exports.getRevenueStats = async (req, res) => {
       },
       { $sort: { _id: 1 } }
     ]);
-    
+
     ResponseHandler.success(res, revenue, 'Revenue stats fetched successfully');
   } catch (error) {
     logger.error(`Get revenue stats error: ${error.message}`);
@@ -269,7 +269,7 @@ exports.getTopServices = async (req, res) => {
       },
       { $unwind: '$serviceDetails' }
     ]);
-    
+
     ResponseHandler.success(res, topServices, 'Top services fetched successfully');
   } catch (error) {
     logger.error(`Get top services error: ${error.message}`);
@@ -287,7 +287,7 @@ exports.getTopProviders = async (req, res) => {
       .select('name profilePicture ratings completedServices')
       .sort({ 'ratings.average': -1, completedServices: -1 })
       .limit(10);
-    
+
     ResponseHandler.success(res, topProviders, 'Top providers fetched successfully');
   } catch (error) {
     logger.error(`Get top providers error: ${error.message}`);
@@ -299,9 +299,9 @@ exports.getTopProviders = async (req, res) => {
 exports.sendBulkNotification = async (req, res) => {
   try {
     const { title, message, targetRole, userIds } = req.body;
-    
+
     const PushNotificationService = require('../services/pushNotification');
-    
+
     if (userIds && userIds.length > 0) {
       await PushNotificationService.sendBulkNotification(userIds, title, message);
     } else if (targetRole) {
@@ -310,13 +310,13 @@ exports.sendBulkNotification = async (req, res) => {
       if (targetRole === 'user') Model = User;
       else if (targetRole === 'provider') Model = ServiceProvider;
       else if (targetRole === 'shop') Model = Shop;
-      
+
       const users = await Model.find({ isActive: true }).select('_id');
       const ids = users.map(u => u._id);
-      
+
       await PushNotificationService.sendBulkNotification(ids, title, message);
     }
-    
+
     ResponseHandler.success(res, null, 'Notifications sent successfully');
   } catch (error) {
     logger.error(`Send bulk notification error: ${error.message}`);
@@ -329,26 +329,26 @@ exports.sendBulkNotification = async (req, res) => {
 exports.getUserDetails = async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     const user = await User.findById(id)
       .select('-password -otp')
       .populate('addresses');
-    
+
     if (!user) {
       return ResponseHandler.error(res, 'User not found', 404);
     }
-    
+
     // Get user's booking history
     const bookings = await Booking.find({ user: id })
       .populate('service provider')
       .sort({ createdAt: -1 })
       .limit(10);
-    
+
     // Get user's payment history
     const payments = await Payment.find({ user: id })
       .sort({ createdAt: -1 })
       .limit(10);
-    
+
     ResponseHandler.success(res, { user, bookings, payments }, 'User details fetched successfully');
   } catch (error) {
     logger.error(`Get user details error: ${error.message}`);
@@ -361,17 +361,17 @@ exports.updateUserStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { isActive } = req.body;
-    
+
     const user = await User.findByIdAndUpdate(
       id,
       { isActive },
       { new: true }
     ).select('-password -otp');
-    
+
     if (!user) {
       return ResponseHandler.error(res, 'User not found', 404);
     }
-    
+
     ResponseHandler.success(res, { user }, `User ${isActive ? 'activated' : 'deactivated'} successfully`);
   } catch (error) {
     logger.error(`Update user status error: ${error.message}`);
@@ -383,37 +383,37 @@ exports.updateUserStatus = async (req, res) => {
 exports.getProviderDetails = async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     const provider = await ServiceProvider.findById(id)
       .select('-password -otp');
-    
+
     if (!provider) {
       return ResponseHandler.error(res, 'Provider not found', 404);
     }
-    
+
     // Get provider's services
     const services = await Service.find({ provider: id })
       .sort({ createdAt: -1 });
-    
+
     // Get provider's booking history
     const bookings = await Booking.find({ provider: id })
       .populate('user service')
       .sort({ createdAt: -1 })
       .limit(10);
-    
+
     // Get provider's earnings
-    const earnings = await Payment.find({ 
-      provider: id, 
-      status: 'success' 
+    const earnings = await Payment.find({
+      provider: id,
+      status: 'success'
     });
-    
+
     const totalEarnings = earnings.reduce((sum, payment) => sum + payment.amount, 0);
-    
-    ResponseHandler.success(res, { 
-      provider, 
-      services, 
-      bookings, 
-      totalEarnings 
+
+    ResponseHandler.success(res, {
+      provider,
+      services,
+      bookings,
+      totalEarnings
     }, 'Provider details fetched successfully');
   } catch (error) {
     logger.error(`Get provider details error: ${error.message}`);
@@ -425,7 +425,7 @@ exports.getProviderDetails = async (req, res) => {
 exports.getAllShops = async (req, res) => {
   try {
     const { page = 1, limit = 20, verificationStatus, search, isActive } = req.query;
-    
+
     const query = {};
     if (verificationStatus) query.verificationStatus = verificationStatus;
     if (isActive !== undefined) query.isActive = isActive === 'true';
@@ -437,15 +437,15 @@ exports.getAllShops = async (req, res) => {
         { ownerName: { $regex: search, $options: 'i' } }
       ];
     }
-    
+
     const shops = await Shop.find(query)
       .select('-password -otp')
       .limit(limit * 1)
       .skip((page - 1) * limit)
       .sort({ createdAt: -1 });
-    
+
     const count = await Shop.countDocuments(query);
-    
+
     ResponseHandler.paginated(res, shops, page, limit, count);
   } catch (error) {
     logger.error(`Get all shops error: ${error.message}`);
@@ -457,37 +457,37 @@ exports.getAllShops = async (req, res) => {
 exports.getShopDetails = async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     const shop = await Shop.findById(id)
       .select('-password -otp');
-    
+
     if (!shop) {
       return ResponseHandler.error(res, 'Shop not found', 404);
     }
-    
+
     // Get shop's products
     const products = await Product.find({ shop: id })
       .sort({ createdAt: -1 });
-    
+
     // Get shop's orders
     const orders = await Booking.find({ 'products.shop': id })
       .populate('user')
       .sort({ createdAt: -1 })
       .limit(10);
-    
+
     // Get shop's earnings
-    const earnings = await Payment.find({ 
-      shop: id, 
-      status: 'success' 
+    const earnings = await Payment.find({
+      shop: id,
+      status: 'success'
     });
-    
+
     const totalEarnings = earnings.reduce((sum, payment) => sum + payment.amount, 0);
-    
-    ResponseHandler.success(res, { 
-      shop, 
-      products, 
-      orders, 
-      totalEarnings 
+
+    ResponseHandler.success(res, {
+      shop,
+      products,
+      orders,
+      totalEarnings
     }, 'Shop details fetched successfully');
   } catch (error) {
     logger.error(`Get shop details error: ${error.message}`);
@@ -499,7 +499,7 @@ exports.getShopDetails = async (req, res) => {
 exports.verifyShop = async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     const shop = await Shop.findByIdAndUpdate(
       id,
       {
@@ -510,11 +510,11 @@ exports.verifyShop = async (req, res) => {
       },
       { new: true }
     );
-    
+
     if (!shop) {
       return ResponseHandler.error(res, 'Shop not found', 404);
     }
-    
+
     // Send approval email
     if (shop.email) {
       await EmailService.sendEmail(
@@ -523,7 +523,7 @@ exports.verifyShop = async (req, res) => {
         `<p>Congratulations ${shop.name}! Your shop has been approved and is now live.</p>`
       );
     }
-    
+
     ResponseHandler.success(res, { shop }, 'Shop verified successfully');
   } catch (error) {
     logger.error(`Verify shop error: ${error.message}`);
@@ -536,7 +536,7 @@ exports.rejectShop = async (req, res) => {
   try {
     const { id } = req.params;
     const { reason } = req.body;
-    
+
     const shop = await Shop.findByIdAndUpdate(
       id,
       {
@@ -546,11 +546,11 @@ exports.rejectShop = async (req, res) => {
       },
       { new: true }
     );
-    
+
     if (!shop) {
       return ResponseHandler.error(res, 'Shop not found', 404);
     }
-    
+
     // Send rejection email
     if (shop.email) {
       await EmailService.sendEmail(
@@ -559,7 +559,7 @@ exports.rejectShop = async (req, res) => {
         `<p>Dear ${shop.name}, your shop application has been rejected. Reason: ${reason}</p>`
       );
     }
-    
+
     ResponseHandler.success(res, { shop }, 'Shop rejected');
   } catch (error) {
     logger.error(`Reject shop error: ${error.message}`);
@@ -570,15 +570,15 @@ exports.rejectShop = async (req, res) => {
 // Get All Bookings
 exports.getAllBookings = async (req, res) => {
   try {
-    const { 
-      page = 1, 
-      limit = 20, 
-      status, 
+    const {
+      page = 1,
+      limit = 20,
+      status,
       search,
       startDate,
-      endDate 
+      endDate
     } = req.query;
-    
+
     const query = {};
     if (status) query.status = status;
     if (startDate || endDate) {
@@ -589,7 +589,7 @@ exports.getAllBookings = async (req, res) => {
     if (search) {
       query.bookingId = { $regex: search, $options: 'i' };
     }
-    
+
     const bookings = await Booking.find(query)
       .populate('user', 'name email phone')
       .populate('provider', 'name email phone')
@@ -598,9 +598,9 @@ exports.getAllBookings = async (req, res) => {
       .limit(limit * 1)
       .skip((page - 1) * limit)
       .sort({ createdAt: -1 });
-    
+
     const count = await Booking.countDocuments(query);
-    
+
     ResponseHandler.paginated(res, bookings, page, limit, count);
   } catch (error) {
     logger.error(`Get all bookings error: ${error.message}`);
@@ -609,10 +609,10 @@ exports.getAllBookings = async (req, res) => {
 };
 
 // Get Booking Details
-exports.getBookingDetails = async (req, res) => {
+exports.getAdminBookingDetails = async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     const booking = await Booking.findById(id)
       .populate('user', 'name email phone profilePicture')
       .populate('provider', 'name email phone profilePicture ratings')
@@ -622,11 +622,11 @@ exports.getBookingDetails = async (req, res) => {
       .populate('products.shop')
       .populate('shopOrderTracking.shop')
       .populate('shopOrderTracking.deliveryPartner');
-    
+
     if (!booking) {
       return ResponseHandler.error(res, 'Booking not found', 404);
     }
-    
+
     ResponseHandler.success(res, { booking }, 'Booking details fetched successfully');
   } catch (error) {
     logger.error(`Get booking details error: ${error.message}`);
@@ -637,7 +637,7 @@ exports.addService = async (req, res) => {
   try {
     // Parse the service data from 'data' field
     const serviceData = JSON.parse(req.body.data);
-    
+
     // Handle uploaded images from multer
     const uploadedImages = [];
     if (req.files && req.files.length > 0) {
@@ -648,7 +648,7 @@ exports.addService = async (req, res) => {
         });
       });
     }
-    
+
     // Combine uploaded images with service data
     const service = await Service.create({
       title: serviceData.title,
@@ -674,13 +674,13 @@ exports.addService = async (req, res) => {
 // Get All Services
 exports.getServices = async (req, res) => {
   try {
-    const { 
-      page = 1, 
-      limit = 20, 
-      category, 
-      search, 
+    const {
+      page = 1,
+      limit = 20,
+      category,
+      search,
       isActive,
-      provider 
+      provider
     } = req.query;
 
     const query = {};
@@ -776,16 +776,16 @@ exports.getServiceDetails = async (req, res) => {
 exports.updateService = async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     // Parse the service data from 'data' field
     const serviceData = JSON.parse(req.body.data);
-    
+
     // Get existing service
     const existingService = await Service.findById(id);
     if (!existingService) {
       return ResponseHandler.error(res, 'Service not found', 404);
     }
-    
+
     // Handle new uploaded images
     const newUploadedImages = [];
     if (req.files && req.files.length > 0) {
@@ -796,25 +796,25 @@ exports.updateService = async (req, res) => {
         });
       });
     }
-    
+
     // Combine existing images (from serviceData.existingImages) with new uploads
     const finalImages = [
       ...(serviceData.existingImages || []), // Keep old images that weren't deleted
       ...newUploadedImages // Add new uploaded images
     ];
-    
+
     // Find images that were removed (to delete from Cloudinary)
-    const removedImages = existingService.images.filter(oldImg => 
+    const removedImages = existingService.images.filter(oldImg =>
       !finalImages.some(newImg => newImg.publicId === oldImg.publicId)
     );
-    
+
     // Delete removed images from Cloudinary
     for (const img of removedImages) {
       if (img.publicId) {
         await deleteFromCloudinary(img.publicId);
       }
     }
-    
+
     // Update service
     const service = await Service.findByIdAndUpdate(
       id,
@@ -858,7 +858,7 @@ exports.deleteService = async (req, res) => {
       );
     }
     const service = await Service.findByIdAndDelete(id);
-   
+
     if (!service) {
       return ResponseHandler.error(res, 'Service not found', 404);
     }
@@ -874,9 +874,9 @@ exports.deleteService = async (req, res) => {
 exports.toggleServiceStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     const service = await Service.findById(id);
-    
+
     if (!service) {
       return ResponseHandler.error(res, 'Service not found', 404);
     }
@@ -956,7 +956,7 @@ exports.getServiceCategories = async (req, res) => {
       const stats = categoryCounts.find(c => c._id === cat);
       return {
         name: cat,
-        displayName: cat.split('-').map(word => 
+        displayName: cat.split('-').map(word =>
           word.charAt(0).toUpperCase() + word.slice(1)
         ).join(' '),
         count: stats?.count || 0,
@@ -982,13 +982,13 @@ exports.getAllTransactions = async (req, res) => {
     }
 
     // Filters
-    const { 
-      paymentMethod, 
-      status, 
-      provider, 
-      shop, 
-      user, 
-      startDate, 
+    const {
+      paymentMethod,
+      status,
+      provider,
+      shop,
+      user,
+      startDate,
       endDate,
       search
     } = req.query;
