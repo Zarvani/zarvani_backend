@@ -4,6 +4,7 @@ const ResponseHandler = require('../utils/responseHandler');
 const BookingService = require('../services/bookingService');
 const logger = require('../utils/logger');
 const mongoose = require("mongoose");
+const CacheService = require('../services/cacheService');
 const CacheInvalidationService = require('../services/cacheInvalidationService');
 const { batchLoadAndAttach } = require('../utils/batchLoader');
 
