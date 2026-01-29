@@ -1,5 +1,6 @@
 const twilio = require('twilio');
 const logger = require('../utils/logger');
+const { circuitBreaker } = require('../middleware/circuitBreaker');
 
 class SMSService {
     constructor() {
@@ -21,18 +22,18 @@ class SMSService {
             // Ensure phone number has + prefix as required by Twilio
             const formattedPhone = phone.startsWith('+') ? phone : `+${phone}`;
 
-            const message = await this.client.messages.create({
-                body: `Yetzo Security: Your OTP is ${otp}. Valid for 10 minutes. Do not share this code with anyone.`,
-                from: this.serviceSid, // This could be a Messaging Service SID or a Twilio number
-                to: formattedPhone
+            const message = await circuitBreaker.execute('SMSService', async () => {
+                return await this.client.messages.create({
+                    body: `Yetzo Security: Your OTP is ${otp}. Valid for 10 minutes. Do not share this code with anyone.`,
+                    from: this.serviceSid,
+                    to: formattedPhone
+                });
             });
 
             logger.info(`SMS sent successfully: ${message.sid}`);
             return true;
         } catch (error) {
             logger.error(`SMS send error: ${error.message}`);
-            // Fallback: if SERVICE_SID doesn't work as 'from', try without it if you have a default number, 
-            // but here we must rely on provided envs.
             return false;
         }
     }
