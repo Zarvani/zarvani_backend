@@ -229,7 +229,8 @@ serviceProviderSchema.methods.comparePassword = async function (enteredPassword)
 
 // Generate OTP
 serviceProviderSchema.methods.generateOTP = function () {
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  const crypto = require('crypto');
+  const otp = crypto.randomInt(100000, 999999).toString();
   this.otp = {
     code: otp,
     expiresAt: new Date(Date.now() + 10 * 60 * 1000),

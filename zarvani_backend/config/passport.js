@@ -45,12 +45,12 @@ redisClient.on("end", () => {
 
 const connectRedis = async () => {
   try {
-    await redisClient.connect();
-    logger.info("🚀 Redis connected successfully");
+    if (!redisClient.isOpen) {
+      await redisClient.connect();
+      logger.info("🚀 Redis connected successfully via passport.js");
+    }
   } catch (err) {
-    logger.error(`❌ Initial Redis connection failed: ${err.message}`);
-    logger.info("Retrying in 3 seconds…");
-    setTimeout(connectRedis, 3000);
+    logger.error(`❌ Redis connection failed: ${err.message}`);
   }
 };
 

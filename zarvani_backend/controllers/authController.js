@@ -37,10 +37,25 @@ exports.sendSignupOTP = async (req, res) => {
     }
 
     const isEmail = identifier.includes("@");
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
+    // ✅ Rate Limiting for OTP Identifier (Max 3 per 10 min)
+    const rateLimitKey = `ratelimit:otp:${identifier}`;
+    const otpRequests = await redisClient.get(rateLimitKey);
+    if (otpRequests && parseInt(otpRequests) >= 3) {
+      return ResponseHandler.error(res, "Too many OTP requests. Please try again later.", 429);
+    }
+
+    const otp = crypto.randomInt(100000, 999999).toString();
 
     // Store OTP in Redis for 10 min
     await redisClient.setEx(`otp:signup:${identifier}`, 600, otp);
+
+    // Increment rate limit counter
+    if (!otpRequests) {
+      await redisClient.setEx(rateLimitKey, 600, "1");
+    } else {
+      await redisClient.incr(rateLimitKey);
+    }
 
     // ✅ OPTIMIZATION: Queue OTP sending (non-blocking)
     await otpQueue.add('send-otp', {
@@ -88,9 +103,23 @@ exports.sendOTP = async (req, res) => {
       return ResponseHandler.error(res, 'User not found. Please sign up first.', 404);
     }
 
+    // ✅ Rate Limiting for OTP Identifier (Max 3 per 10 min)
+    const rateLimitKey = `ratelimit:otp:${identifier}`;
+    const otpRequests = await redisClient.get(rateLimitKey);
+    if (otpRequests && parseInt(otpRequests) >= 3) {
+      return ResponseHandler.error(res, "Too many OTP requests. Please try again later.", 429);
+    }
+
     // Generate and save OTP
     const otp = user.generateOTP();
     await user.save();
+
+    // Increment rate limit counter
+    if (!otpRequests) {
+      await redisClient.setEx(rateLimitKey, 600, "1");
+    } else {
+      await redisClient.incr(rateLimitKey);
+    }
 
     // ✅ OPTIMIZATION: Queue OTP sending (non-blocking)
     let sentTo = [];

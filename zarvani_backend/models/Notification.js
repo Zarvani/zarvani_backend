@@ -1,7 +1,5 @@
-
 // ============= models/Notification.js =============
 const mongoose = require('mongoose');
-const bcrypt = require('bcryptjs');
 
 const notificationSchema = new mongoose.Schema({
   recipient: {
@@ -39,6 +37,10 @@ const notificationSchema = new mongoose.Schema({
     sms: { type: Boolean, default: false }
   }
 }, { timestamps: true });
+
+// Performance Indexes
+notificationSchema.index({ recipient: 1, isRead: 1, createdAt: -1 });
+notificationSchema.index({ recipient: 1, type: 1 });
 
 module.exports = {
   Notification: mongoose.model('Notification', notificationSchema)
