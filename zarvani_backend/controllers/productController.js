@@ -130,18 +130,33 @@ exports.getAllProducts = async (req, res) => {
     ResponseHandler.error(res, error.message, 500);
   }
 };
-// Get Product Details by ID
+// Get Product Details by ID (Optimized with Cache-Aside Pattern)
 exports.getProductDetails = async (req, res) => {
   try {
-    const product = await Product.findById(req.params.id)
+    const { id } = req.params;
+    const cacheKey = `product:details:${id}`;
+
+    // 1. Try Cache First
+    const cachedProduct = await CacheService.get(cacheKey);
+    if (cachedProduct) {
+      logger.debug(`Cache HIT: Product details for ${id}`);
+      return ResponseHandler.success(res, { product: cachedProduct }, 'Product details fetched from cache');
+    }
+
+    // 2. Database Fallback
+    const product = await Product.findById(id)
       .populate('shop', 'name logo address phone ratings workingHours');
 
     if (!product) {
       return ResponseHandler.error(res, 'Product not found', 404);
     }
 
+    // 3. Update Cache (10 minutes TTL)
+    await CacheService.set(cacheKey, product, 600);
+
     ResponseHandler.success(res, { product }, 'Product details fetched successfully');
   } catch (error) {
+    logger.error(`Get product details error: ${error.message}`);
     ResponseHandler.error(res, error.message, 500);
   }
 };

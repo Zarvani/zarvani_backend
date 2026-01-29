@@ -14,8 +14,8 @@ const options = {
         },
         servers: [
             {
-                url: 'http://localhost:4000',
-                description: 'Development server',
+                url: process.env.BASE_URL || `http://localhost:${process.env.PORT || 4000}`,
+                description: 'Current Environment',
             },
         ],
         components: {

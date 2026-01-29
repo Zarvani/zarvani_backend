@@ -106,6 +106,30 @@ class PaymentService {
       userId = refDoc.user;
     }
 
+    // ✅ IDEMPOTENCY: Check for existing PENDING payment for this entity
+    // This prevents creating multiple Razorpay orders for the same booking/order
+    const existingPayment = await Payment.findOne({
+      [bookingId ? 'booking' : 'order']: bookingId || orderId,
+      status: 'pending',
+      amount: amount,
+      createdAt: { $gt: new Date(Date.now() - 20 * 60 * 1000) } // Recent (20 mins)
+    }).session(session);
+
+    if (existingPayment && existingPayment.transactionId) {
+      logger.info(`Idempotency HIT: Reusing existing Razorpay order ${existingPayment.transactionId}`);
+      return {
+        orderId: existingPayment.transactionId,
+        amount: Math.round(existingPayment.amount * 100),
+        currency: "INR",
+        paymentId: existingPayment._id,
+        paymentDestination: existingPayment.paymentDestination,
+        commission: {
+          rate: existingPayment.paymentDestination === "company_account" ? 15 : 20,
+          amount: existingPayment.totalCommission,
+        },
+      };
+    }
+
     const receipt = `RCPT-${Date.now()}`;
 
     const razorpayOrder = await this.createRazorpayOrder(

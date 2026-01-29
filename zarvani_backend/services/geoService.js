@@ -1,6 +1,8 @@
 // ============= services/geoService.js =============
 const axios = require("axios");
 const logger = require("../utils/logger");
+const redisClient = require("../config/passport");
+const { circuitBreaker } = require('../middleware/circuitBreaker');
 
 class GeoService {
   // -----------------------------
@@ -26,8 +28,8 @@ class GeoService {
     const a =
       Math.sin(dLat / 2) ** 2 +
       Math.cos(this.toRad(lat1)) *
-        Math.cos(this.toRad(lat2)) *
-        Math.sin(dLon / 2) ** 2;
+      Math.cos(this.toRad(lat2)) *
+      Math.sin(dLon / 2) ** 2;
 
     return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
   }
@@ -41,22 +43,32 @@ class GeoService {
         typeof address === "string"
           ? address
           : [
-              address.addressLine1,
-              address.addressLine2,
-              address.landmark,
-              address.city,
-              address.state,
-              address.pincode,
-              address.country,
-            ]
-              .filter(Boolean)
-              .join(", ");
+            address.addressLine1,
+            address.addressLine2,
+            address.landmark,
+            address.city,
+            address.state,
+            address.pincode,
+            address.country,
+          ]
+            .filter(Boolean)
+            .join(", ");
 
-      const response = await axios.get(this.GEOCODE_URL, {
-        params: {
-          address: addressString,
-          key: this.API_KEY,
-        },
+      // ✅ CACHE CHECK
+      const cacheKey = `geo:geocode:${addressString.replace(/\s+/g, '_')}`;
+      const cached = await redisClient.get(cacheKey);
+      if (cached) {
+        logger.debug(`Geo-Cache HIT for geocode: ${addressString}`);
+        return JSON.parse(cached);
+      }
+
+      const response = await circuitBreaker.execute('GoogleMapsAPI', async () => {
+        return await axios.get(this.GEOCODE_URL, {
+          params: {
+            address: addressString,
+            key: this.API_KEY,
+          },
+        });
       });
 
       if (response.data.status !== "OK")
@@ -65,12 +77,17 @@ class GeoService {
       const result = response.data.results[0];
       const loc = result.geometry.location;
 
-      return {
+      const output = {
         success: true,
         coordinates: [loc.lng, loc.lat],
         formattedAddress: result.formatted_address,
         addressComponents: result.address_components,
       };
+
+      // ✅ SET CACHE (24 hours for geocoding)
+      await redisClient.setEx(cacheKey, 86400, JSON.stringify(output));
+
+      return output;
     } catch (error) {
       logger.error("Geocoding error:", error.message);
       return { success: false, error: error.message };
@@ -82,11 +99,21 @@ class GeoService {
   // -----------------------------
   static async getAddressFromCoordinates(lat, lng) {
     try {
-      const response = await axios.get(this.GEOCODE_URL, {
-        params: {
-          latlng: `${lat},${lng}`,
-          key: this.API_KEY,
-        },
+      // ✅ CACHE CHECK
+      const cacheKey = `geo:reverse:${lat},${lng}`;
+      const cached = await redisClient.get(cacheKey);
+      if (cached) {
+        logger.debug(`Geo-Cache HIT for reverse geocode: ${lat},${lng}`);
+        return JSON.parse(cached);
+      }
+
+      const response = await circuitBreaker.execute('GoogleMapsAPI', async () => {
+        return await axios.get(this.GEOCODE_URL, {
+          params: {
+            latlng: `${lat},${lng}`,
+            key: this.API_KEY,
+          },
+        });
       });
 
       if (response.data.status !== "OK")
@@ -94,11 +121,16 @@ class GeoService {
 
       const result = response.data.results[0];
 
-      return {
+      const output = {
         success: true,
         address: result.formatted_address,
         addressComponents: result.address_components,
       };
+
+      // ✅ SET CACHE (24 hours)
+      await redisClient.setEx(cacheKey, 86400, JSON.stringify(output));
+
+      return output;
     } catch (error) {
       logger.error("Reverse geocoding error:", error.message);
       return { success: false, error: error.message };
@@ -110,13 +142,23 @@ class GeoService {
   // -----------------------------
   static async calculateETA(origin, destination, mode = "driving") {
     try {
-      const response = await axios.get(this.DISTANCE_MATRIX_URL, {
-        params: {
-          origins: `${origin.latitude},${origin.longitude}`,
-          destinations: `${destination.latitude},${destination.longitude}`,
-          mode,
-          key: this.API_KEY,
-        },
+      // ✅ CACHE CHECK
+      const cacheKey = `geo:eta:${origin.latitude},${origin.longitude}:${destination.latitude},${destination.longitude}:${mode}`;
+      const cached = await redisClient.get(cacheKey);
+      if (cached) {
+        logger.debug(`Geo-Cache HIT for ETA: ${origin.latitude},${origin.longitude} -> ${destination.latitude},${destination.longitude}`);
+        return JSON.parse(cached);
+      }
+
+      const response = await circuitBreaker.execute('GoogleMapsAPI', async () => {
+        return await axios.get(this.DISTANCE_MATRIX_URL, {
+          params: {
+            origins: `${origin.latitude},${origin.longitude}`,
+            destinations: `${destination.latitude},${destination.longitude}`,
+            mode,
+            key: this.API_KEY,
+          },
+        });
       });
 
       const element = response?.data?.rows?.[0]?.elements?.[0];
@@ -124,13 +166,18 @@ class GeoService {
       if (!element || element.status !== "OK")
         return { success: false, error: "Unable to calculate ETA" };
 
-      return {
+      const output = {
         success: true,
         distance: element.distance.value / 1000,
         duration: element.duration.value / 60,
         distanceText: element.distance.text,
         durationText: element.duration.text,
       };
+
+      // ✅ SET CACHE (Short duration for ETA - 5 minutes)
+      await redisClient.setEx(cacheKey, 300, JSON.stringify(output));
+
+      return output;
     } catch (error) {
       logger.error("ETA error:", error.message);
       return { success: false, error: error.message };
@@ -142,13 +189,15 @@ class GeoService {
   // -----------------------------
   static async findNearbyShops(lat, lng, radius = 5000, limit = 20) {
     try {
-      const response = await axios.get(this.PLACES_URL, {
-        params: {
-          location: `${lat},${lng}`,
-          radius,
-          type: "grocery_or_supermarket",
-          key: this.API_KEY,
-        },
+      const response = await circuitBreaker.execute('GoogleMapsAPI', async () => {
+        return await axios.get(this.PLACES_URL, {
+          params: {
+            location: `${lat},${lng}`,
+            radius,
+            type: "grocery_or_supermarket",
+            key: this.API_KEY,
+          },
+        });
       });
 
       if (response.data.status !== "OK")

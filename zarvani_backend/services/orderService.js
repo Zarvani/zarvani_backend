@@ -82,10 +82,24 @@ class OrderService {
             let savings = 0;
             const orderItems = [];
 
+
             for (const item of items) {
                 const product = productMap.get(item.productId.toString());
                 if (!product || !product.isAvailable) throw new Error(`Product ${product?.name || item.productId} not available`);
-                if (product.stock.quantity < item.quantity) throw new Error(`Insufficient stock for ${product.name}`);
+
+                // ATOMIC OPERATION: Deduct stock only if sufficient quantity exists
+                const updatedProduct = await Product.findOneAndUpdate(
+                    {
+                        _id: item.productId,
+                        'stock.quantity': { $gte: item.quantity }
+                    },
+                    { $inc: { 'stock.quantity': -item.quantity } },
+                    { session, new: true }
+                );
+
+                if (!updatedProduct) {
+                    throw new Error(`Insufficient stock for ${product.name}. Only ${product.stock.quantity} left.`);
+                }
 
                 const itemTotal = product.price.sellingPrice * item.quantity;
                 const itemSavings = (product.price.mrp - product.price.sellingPrice) * item.quantity;
@@ -102,10 +116,6 @@ class OrderService {
                     total: itemTotal,
                     weight: product.weight
                 });
-
-                // Deduct Stock
-                product.stock.quantity -= item.quantity;
-                await product.save({ session });
             }
 
             if (itemsTotal < shop.deliverySettings.minOrderAmount) {

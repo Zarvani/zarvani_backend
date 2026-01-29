@@ -8,6 +8,8 @@ const CacheService = require('../services/cacheService');
 const CacheInvalidationService = require('../services/cacheInvalidationService');
 const { batchLoadAndAttach } = require('../utils/batchLoader');
 
+const searchQueue = require('../queues/searchQueue');
+
 // ========================== CREATE BOOKING ==========================
 exports.createBooking = async (req, res) => {
   try {
@@ -15,6 +17,10 @@ exports.createBooking = async (req, res) => {
       userId: req.user._id,
       body: req.body
     }, req.app);
+
+    // ✅ DURABILITY: Add to persistent search queue 
+    // Ensures provider search continues even if the server restarts
+    await searchQueue.add({ bookingId: booking._id });
 
     return ResponseHandler.success(
       res,
@@ -28,182 +34,7 @@ exports.createBooking = async (req, res) => {
   }
 };
 
-// ========================== SEARCH AND NOTIFY PROVIDERS ==========================
-async function searchAndNotifyProviders(booking) {
-  try {
-    const serviceCategory = booking.serviceDetails.category;
-    const userLocation = booking.address.location.coordinates;
-    const searchRadius = booking.providerSearchRadius;
-
-    // 1. Find available providers within radius
-    const availableProviders = await ServiceProvider.find({
-      verificationStatus: "approved",
-      isActive: true,
-      "availability.isAvailable": true,
-      serviceCategories: { $in: [serviceCategory] },
-      "address.location": {
-        $near: {
-          $geometry: { type: "Point", coordinates: userLocation },
-          $maxDistance: searchRadius * 1000
-        }
-      }
-    }).limit(15);
-
-    // 2. No providers found → expand radius
-    if (availableProviders.length === 0) {
-      if (booking.searchAttempts < 3 && booking.providerSearchRadius < booking.maxSearchRadius) {
-        booking.providerSearchRadius += 5;
-        booking.searchAttempts += 1;
-        await booking.save();
-
-        logger.info(`Expanding search radius to ${booking.providerSearchRadius}km for booking ${booking.bookingId}`);
-
-        // Retry with larger radius after 30 seconds
-        setTimeout(() => searchAndNotifyProviders(booking), 30000);
-        return;
-      }
-
-      booking.status = "no-provider-found";
-      await booking.save();
-
-      await PushNotificationService.sendToUser(
-        booking.user,
-        "No Providers Found",
-        "Sorry, no providers are available near your location."
-      );
-
-      // Create notification for user
-      await Notification.create({
-        recipient: booking.user,
-        recipientModel: 'User',
-        type: 'booking',
-        title: 'No Providers Found',
-        message: 'We could not find any available service providers in your area. Please try again later.',
-        data: {
-          bookingId: booking._id,
-          bookingIdDisplay: booking.bookingId
-        },
-        channels: { push: true, email: true, sms: false }
-      });
-
-      return;
-    }
-
-    // 3. Calculate distances for each provider
-    const providersWithDistance = await Promise.all(
-      availableProviders.map(async (provider) => {
-        const distance = GeoService.calculateDistance(
-          provider.address.location.coordinates[1],
-          provider.address.location.coordinates[0],
-          userLocation[1],
-          userLocation[0]
-        );
-
-        // Calculate estimated arrival time
-        const estimatedTime = BookingService.calculateEstimatedTime(distance);
-
-        // Calculate acceptance rate
-        const providerStats = await Booking.aggregate([
-          {
-            $match: {
-              provider: provider._id,
-              'notifiedProviders.response': 'accepted'
-            }
-          },
-          {
-            $group: {
-              _id: null,
-              accepted: { $sum: 1 }
-            }
-          }
-        ]);
-
-        const totalNotified = booking.notifiedProviders.filter(np =>
-          np.provider.toString() === provider._id.toString()
-        ).length;
-
-        const acceptanceRate = totalNotified > 0 ?
-          (providerStats[0]?.accepted || 0) / totalNotified * 100 : 100;
-
-        return {
-          provider,
-          distance,
-          estimatedTime,
-          acceptanceRate
-        };
-      })
-    );
-
-    // Sort by distance (nearest first)
-    providersWithDistance.sort((a, b) => a.distance - b.distance);
-
-    // 4. Add providers to notifiedProviders with distance and ETA
-    booking.notifiedProviders.push(
-      ...providersWithDistance.map(pwd => ({
-        provider: pwd.provider._id,
-        notifiedAt: new Date(),
-        response: "pending",
-        metadata: {
-          distance: pwd.distance,
-          estimatedTime: pwd.estimatedTime,
-          acceptanceRate: pwd.acceptanceRate,
-          providerName: pwd.provider.name,
-          providerRating: pwd.provider.ratings?.average || 5.0
-        }
-      }))
-    );
-    await booking.save();
-
-    // 5. Send notifications with enhanced details
-    await Promise.all(
-      providersWithDistance.map(async (pwd) => {
-        const provider = pwd.provider;
-        const distance = pwd.distance;
-        const estimatedTime = pwd.estimatedTime;
-
-        // Prepare notification data - NO EXPIRY TIME
-        const notificationData = {
-          bookingId: booking._id,
-          bookingIdDisplay: booking.bookingId,
-          service: booking.serviceDetails.title,
-          amount: booking.totalAmount,
-          address: `${booking.address.addressLine1}, ${booking.address.city}`,
-          distance: distance.toFixed(2),
-          estimatedTime: estimatedTime,
-          customerLocation: userLocation,
-          priority: distance < 3 ? 'high' : distance < 10 ? 'medium' : 'low'
-        };
-
-        // Save notification in DB
-        await Notification.create({
-          recipient: provider._id,
-          recipientModel: "ServiceProvider",
-          type: "booking_request",
-          title: "🚀 New Booking Request",
-          message: `${booking.serviceDetails.title} - ₹${booking.totalAmount}\nDistance: ${distance.toFixed(1)}km • ETA: ${estimatedTime} min`,
-          data: notificationData,
-          channels: { push: true, email: false, sms: false }
-        });
-
-        // Enhanced push notification
-        await PushNotificationService.sendToProvider(provider._id, {
-          title: `New ${booking.serviceDetails.category} Request`,
-          body: `₹${booking.totalAmount} • ${distance.toFixed(1)}km away • ${estimatedTime} min`,
-          data: notificationData
-        });
-      })
-    );
-
-    // ⚡ NO AUTO TIMEOUT - Providers can accept anytime
-    // Booking stays in 'searching' status until:
-    // 1. Provider accepts
-    // 2. User cancels
-    // 3. No providers found
-
-  } catch (error) {
-    logger.error(`Search providers error: ${error.message}`);
-  }
-}
+// Note: Internal searchAndNotifyProviders logic moved to queues/searchQueue.js
 
 // ========================== PROVIDER ACCEPTS BOOKING ==========================
 exports.acceptBooking = async (req, res) => {

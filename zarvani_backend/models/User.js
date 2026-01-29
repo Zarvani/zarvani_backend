@@ -111,11 +111,11 @@ const userSchema = new mongoose.Schema({
 addressSchema.index({ location: '2dsphere' });
 
 // Hash password before saving
-userSchema.pre('save', async function(next) {
+userSchema.pre('save', async function (next) {
   if (!this.isModified('password')) {
     return next();
   }
-  
+
   if (this.password) {
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);
@@ -124,13 +124,14 @@ userSchema.pre('save', async function(next) {
 });
 
 // Compare password method
-userSchema.methods.comparePassword = async function(enteredPassword) {
+userSchema.methods.comparePassword = async function (enteredPassword) {
   return await bcrypt.compare(enteredPassword, this.password);
 };
 
 // Generate OTP
-userSchema.methods.generateOTP = function() {
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+userSchema.methods.generateOTP = function () {
+  const crypto = require('crypto');
+  const otp = crypto.randomInt(100000, 999999).toString();
   this.otp = {
     code: otp,
     expiresAt: new Date(Date.now() + 10 * 60 * 1000), // 10 minutes
@@ -140,19 +141,19 @@ userSchema.methods.generateOTP = function() {
 };
 
 // Verify OTP
-userSchema.methods.verifyOTP = function(enteredOTP) {
+userSchema.methods.verifyOTP = function (enteredOTP) {
   if (!this.otp || !this.otp.code) {
     return false;
   }
-  
+
   if (this.otp.expiresAt < new Date()) {
     return false;
   }
-  
+
   if (this.otp.attempts >= 5) {
     return false;
   }
-  
+
   return this.otp.code === enteredOTP;
 };
 

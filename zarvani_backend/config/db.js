@@ -37,7 +37,7 @@ const connectDB = async () => {
 
     logger.info(`✅ MongoDB Connected: ${conn.connection.host}`);
     logger.info(`📊 Connection Pool: Min=${options.minPoolSize}, Max=${options.maxPoolSize}`);
-    console.log(`✅ MongoDB Connected: ${conn.connection.host}`);
+    logger.info(`✅ MongoDB Connected: ${conn.connection.host}`);
 
     // Log connection pool stats periodically (every 60 seconds)
     setInterval(() => {

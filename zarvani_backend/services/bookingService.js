@@ -65,7 +65,6 @@ class BookingService {
             timestamps: { searchingAt: new Date() }
         });
 
-        this.searchAndNotifyProviders(booking, app).catch(e => logger.error(`Provider Search Error: ${e.message}`));
         return booking;
     }
 
@@ -137,18 +136,33 @@ class BookingService {
     }
 
     static async acceptBooking(bookingId, providerId, app = null) {
-        const booking = await Booking.findOne({ $or: [{ _id: bookingId }, { bookingId }], status: 'searching' });
-        if (!booking) throw new Error('Booking no longer available');
+        // ATOMIC OPERATION: findOneAndUpdate ensures only one provider can accept a 'searching' booking
+        const booking = await Booking.findOneAndUpdate(
+            {
+                $or: [{ _id: bookingId }, { bookingId }],
+                status: 'searching'
+            },
+            {
+                $set: {
+                    status: 'provider-assigned',
+                    provider: providerId,
+                    'timestamps.providerAssignedAt': new Date()
+                }
+            },
+            { new: true }
+        );
 
-        booking.provider = providerId;
-        booking.status = "provider-assigned";
-        await booking.save();
+        if (!booking) {
+            logger.warn(`Race Condition Blocked: Provider ${providerId} tried to accept already-assigned booking ${bookingId}`);
+            throw new Error('Booking no longer available or already assigned');
+        }
 
         NotificationService.send({
             recipient: booking.user, recipientType: 'User', type: 'booking',
             title: 'Provider Assigned!', message: 'Provider has accepted your booking.',
             data: { bookingId: booking._id }
         }, app);
+
         return booking;
     }
 

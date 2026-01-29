@@ -1,6 +1,7 @@
 // ============= services/emailService.js =============
 const nodemailer = require('nodemailer');
 const logger = require('../utils/logger');
+const { circuitBreaker } = require('../middleware/circuitBreaker');
 
 const transporter = nodemailer.createTransport({
   host: process.env.EMAIL_HOST,
@@ -21,8 +22,11 @@ class EmailService {
         subject,
         html
       };
-      
-      const info = await transporter.sendMail(mailOptions);
+
+      const info = await circuitBreaker.execute('EmailService', async () => {
+        return await transporter.sendMail(mailOptions);
+      });
+
       logger.info(`Email sent: ${info.messageId}`);
       return true;
     } catch (error) {
@@ -30,7 +34,7 @@ class EmailService {
       return false;
     }
   }
-  
+
   static async sendOTP(email, otp, name) {
     const html = `
       <!DOCTYPE html>
@@ -58,10 +62,10 @@ class EmailService {
       </body>
       </html>
     `;
-    
+
     return await this.sendEmail(email, 'Your Yetzo OTP', html);
   }
-  
+
   static async sendBookingConfirmation(email, bookingDetails) {
     const html = `
       <!DOCTYPE html>
@@ -84,10 +88,10 @@ class EmailService {
       </body>
       </html>
     `;
-    
+
     return await this.sendEmail(email, 'Booking Confirmation - Yetzo', html);
   }
-  
+
   static async sendPasswordReset(email, resetLink, name) {
     const html = `
       <!DOCTYPE html>
@@ -104,10 +108,10 @@ class EmailService {
       </body>
       </html>
     `;
-    
+
     return await this.sendEmail(email, 'Password Reset - Yetzo', html);
   }
-  
+
   static async sendWelcomeEmail(email, name, role) {
     const html = `
       <!DOCTYPE html>
@@ -126,7 +130,7 @@ class EmailService {
       </body>
       </html>
     `;
-    
+
     return await this.sendEmail(email, 'Welcome to Yetzo', html);
   }
 }

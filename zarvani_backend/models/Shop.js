@@ -59,9 +59,9 @@ const deliveryBoySchema = new mongoose.Schema({
       default: 'Point'
     },
     coordinates: {
-        type: [Number],
-        default: [0, 0]
-      },
+      type: [Number],
+      default: [0, 0]
+    },
     address: String,
     updatedAt: Date
   },
@@ -91,14 +91,14 @@ const deliveryBoySchema = new mongoose.Schema({
     total: { type: Number, default: 0 },          // Total earnings from all orders
     lastUpdated: { type: Date, default: Date.now }
   },
-  
+
   // ✅ ADD: Commission tracking separately
   commission: {
     due: { type: Number, default: 0 },            // Total commission due to company
     paid: { type: Number, default: 0 },           // Total commission paid to company
     lastPaymentDate: Date
   },
-  
+
   // ✅ ADD: Bank/UPI details for auto-payout
   bankDetails: {
     upiId: String,
@@ -112,14 +112,14 @@ const deliveryBoySchema = new mongoose.Schema({
 
 deliveryBoySchema.index({ 'currentLocation': '2dsphere' });
 
-deliveryBoySchema.pre('save', async function(next) {
+deliveryBoySchema.pre('save', async function (next) {
   if (!this.isModified('password')) return next();
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
   next();
 });
 
-deliveryBoySchema.methods.comparePassword = async function(pwd) {
+deliveryBoySchema.methods.comparePassword = async function (pwd) {
   return await bcrypt.compare(pwd, this.password);
 };
 
@@ -188,13 +188,13 @@ const shopSchema = new mongoose.Schema({
   ownerPhone: String,
   gstNumber: String,
   fssaiLicense: String,
-  
+
   // Delivery Settings
   deliverySettings: {
     enabled: { type: Boolean, default: true },
     radius: { type: Number, default: 5 }, // in km
     minOrderAmount: { type: Number, default: 0 },
-    deliveryFee: { 
+    deliveryFee: {
       baseFee: { type: Number, default: 20 },
       perKm: { type: Number, default: 5 },
       freeDeliveryAbove: { type: Number, default: 299 }
@@ -212,10 +212,10 @@ const shopSchema = new mongoose.Schema({
       currentOrders: { type: Number, default: 0 }
     }]
   },
-  
+
   // Shop-owned delivery boys
   deliveryBoys: [deliveryBoySchema],
-  
+
   documents: {
     businessLicense: {
       url: String,
@@ -233,51 +233,51 @@ const shopSchema = new mongoose.Schema({
       verified: { type: Boolean, default: false }
     }
   },
-  
+
   categories: [{
     type: String,
     required: true
   }],
-  
- workingHours: {
-  monday: { 
-    start: { type: String, default: "00:00" },
-    end: { type: String, default: "23:59" },
-    isOpen: { type: Boolean, default: true }
-  },
-  tuesday: { 
-    start: { type: String, default: "00:00" },
-    end: { type: String, default: "23:59" },
-    isOpen: { type: Boolean, default: true }
-  },
-  wednesday: { 
-    start: { type: String, default: "00:00" },
-    end: { type: String, default: "23:59" },
-    isOpen: { type: Boolean, default: true }
-  },
-  thursday: { 
-    start: { type: String, default: "00:00" },
-    end: { type: String, default: "23:59" },
-    isOpen: { type: Boolean, default: true }
-  },
-  friday: { 
-    start: { type: String, default: "00:00" },
-    end: { type: String, default: "23:59" },
-    isOpen: { type: Boolean, default: true }
-  },
-  saturday: { 
-    start: { type: String, default: "00:00" },
-    end: { type: String, default: "23:59" },
-    isOpen: { type: Boolean, default: true }
-  },
-  sunday: { 
-    start: { type: String, default: "00:00" },
-    end: { type: String, default: "23:59" },
-    isOpen: { type: Boolean, default: true }
-  }
-},
 
-  
+  workingHours: {
+    monday: {
+      start: { type: String, default: "00:00" },
+      end: { type: String, default: "23:59" },
+      isOpen: { type: Boolean, default: true }
+    },
+    tuesday: {
+      start: { type: String, default: "00:00" },
+      end: { type: String, default: "23:59" },
+      isOpen: { type: Boolean, default: true }
+    },
+    wednesday: {
+      start: { type: String, default: "00:00" },
+      end: { type: String, default: "23:59" },
+      isOpen: { type: Boolean, default: true }
+    },
+    thursday: {
+      start: { type: String, default: "00:00" },
+      end: { type: String, default: "23:59" },
+      isOpen: { type: Boolean, default: true }
+    },
+    friday: {
+      start: { type: String, default: "00:00" },
+      end: { type: String, default: "23:59" },
+      isOpen: { type: Boolean, default: true }
+    },
+    saturday: {
+      start: { type: String, default: "00:00" },
+      end: { type: String, default: "23:59" },
+      isOpen: { type: Boolean, default: true }
+    },
+    sunday: {
+      start: { type: String, default: "00:00" },
+      end: { type: String, default: "23:59" },
+      isOpen: { type: Boolean, default: true }
+    }
+  },
+
+
   ratings: {
     average: { type: Number, default: 0, min: 0, max: 5 },
     count: { type: Number, default: 0 },
@@ -289,7 +289,7 @@ const shopSchema = new mongoose.Schema({
       createdAt: { type: Date, default: Date.now }
     }]
   },
-  
+
   orderStats: {
     total: { type: Number, default: 0 },
     today: { type: Number, default: 0 },
@@ -299,7 +299,7 @@ const shopSchema = new mongoose.Schema({
     delivered: { type: Number, default: 0 },
     cancelled: { type: Number, default: 0 }
   },
-  
+
   earnings: {
     today: { type: Number, default: 0 },
     weekly: { type: Number, default: 0 },
@@ -308,7 +308,7 @@ const shopSchema = new mongoose.Schema({
     pending: { type: Number, default: 0 },
     withdrawn: { type: Number, default: 0 }
   },
-  
+
   bankDetails: {
     accountHolderName: String,
     accountNumber: String,
@@ -316,39 +316,39 @@ const shopSchema = new mongoose.Schema({
     bankName: String,
     branch: String
   },
-  
+
   verificationStatus: {
     type: String,
     enum: ['pending', 'approved', 'rejected', 'suspended'],
     default: 'pending'
   },
   rejectionReason: String,
-  
+
   isActive: {
     type: Boolean,
     default: false
   },
-  
+
   isOpen: {
     type: Boolean,
     default: true
   },
-  
+
   lastLogin: Date,
-  
+
   otp: {
     code: String,
     expiresAt: Date,
     attempts: { type: Number, default: 0 }
   },
-  
+
   // Quick Commerce Features
   sla: {
     acceptTime: { type: Number, default: 60 }, // seconds to accept order
     preparationTime: { type: Number, default: 15 }, // minutes
     deliveryTime: { type: Number, default: 30 } // minutes
   },
-  
+
   features: {
     expressDelivery: { type: Boolean, default: false },
     midnightDelivery: { type: Boolean, default: false },
@@ -356,22 +356,22 @@ const shopSchema = new mongoose.Schema({
     contactlessDelivery: { type: Boolean, default: true },
     returnPolicy: { type: Boolean, default: true }
   },
-  
+
   tags: [String],
-  
+
   inventoryManagement: {
     lowStockAlert: { type: Boolean, default: true },
     autoReorder: { type: Boolean, default: false },
     reorderLevel: { type: Number, default: 10 }
   },
-  
+
   notificationSettings: {
     newOrder: { type: Boolean, default: true },
     lowStock: { type: Boolean, default: true },
     orderUpdate: { type: Boolean, default: true },
     marketing: { type: Boolean, default: true }
   }
-}, { 
+}, {
   timestamps: true,
   toJSON: { virtuals: true },
   toObject: { virtuals: true }
@@ -381,31 +381,32 @@ shopSchema.index({ 'address.location': '2dsphere' });
 shopSchema.index({ name: 'text', categories: 'text' });
 shopSchema.index({ isActive: 1, isOpen: 1, verificationStatus: 1 });
 
-shopSchema.virtual('deliveryTime').get(function() {
+shopSchema.virtual('deliveryTime').get(function () {
   return `${this.deliverySettings.estimatedDeliveryTime.min}-${this.deliverySettings.estimatedDeliveryTime.max} min`;
 });
 
-shopSchema.virtual('deliveryFeeRange').get(function() {
+shopSchema.virtual('deliveryFeeRange').get(function () {
   return {
     min: this.deliverySettings.deliveryFee.baseFee,
-    max: this.deliverySettings.deliveryFee.baseFee + 
-         (this.deliverySettings.radius * this.deliverySettings.deliveryFee.perKm)
+    max: this.deliverySettings.deliveryFee.baseFee +
+      (this.deliverySettings.radius * this.deliverySettings.deliveryFee.perKm)
   };
 });
 
-shopSchema.pre('save', async function(next) {
+shopSchema.pre('save', async function (next) {
   if (!this.isModified('password')) return next();
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
   next();
 });
 
-shopSchema.methods.comparePassword = async function(pwd) {
+shopSchema.methods.comparePassword = async function (pwd) {
   return await bcrypt.compare(pwd, this.password);
 };
 
-shopSchema.methods.generateOTP = function() {
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+shopSchema.methods.generateOTP = function () {
+  const crypto = require('crypto');
+  const otp = crypto.randomInt(100000, 999999).toString();
   this.otp = {
     code: otp,
     expiresAt: new Date(Date.now() + 10 * 60 * 1000),
@@ -414,7 +415,7 @@ shopSchema.methods.generateOTP = function() {
   return otp;
 };
 
-shopSchema.methods.verifyOTP = function(enteredOTP) {
+shopSchema.methods.verifyOTP = function (enteredOTP) {
   if (!this.otp || !this.otp.code) return false;
   if (this.otp.expiresAt < new Date()) return false;
   if (this.otp.attempts >= 5) return false;
@@ -446,26 +447,44 @@ shopSchema.methods.isShopOpenNow = function () {
   return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
 };
 
-// Method to assign delivery boy
-shopSchema.methods.assignDeliveryBoy = async function(orderId) {
-  const availableBoys = this.deliveryBoys.filter(boy => 
+// Method to assign delivery boy (Hardened to prevent race conditions)
+shopSchema.methods.assignDeliveryBoy = async function (orderId) {
+  // 1. Find available boys in memory first to pick one
+  const availableBoys = this.deliveryBoys.filter(boy =>
     boy.status === 'active' && boy.isActive
   );
-  
+
   if (availableBoys.length === 0) return null;
-  
-  // Sort by number of assigned orders
+
+  // Sort by number of assigned orders to balance load
   availableBoys.sort((a, b) => a.assignedOrders.length - b.assignedOrders.length);
-  
-  const assignedBoy = availableBoys[0];
-  assignedBoy.assignedOrders.push(orderId);
-  
-  if (assignedBoy.assignedOrders.length === 1) {
-    assignedBoy.status = 'on-delivery';
+  const pickedBoy = availableBoys[0];
+
+  // 2. Perform ATOMIC update on the database to verify he's still available
+  // This prevents two simultaneous orders from being assigned to the same "free" slot
+  const updatedShop = await this.constructor.findOneAndUpdate(
+    {
+      _id: this._id,
+      'deliveryBoys._id': pickedBoy._id,
+      'deliveryBoys.status': 'active' // Ensure he hasn't been picked by another process
+    },
+    {
+      $push: { 'deliveryBoys.$.assignedOrders': orderId },
+      $set: {
+        'deliveryBoys.$.status': 'on-delivery',
+        'deliveryBoys.$.lastAssignedAt': new Date()
+      }
+    },
+    { new: true }
+  );
+
+  if (!updatedShop) {
+    logger.warn(`Race condition in delivery boy assignment for shop ${this._id}. Retrying...`);
+    // OPTIONAL: Implementation of a recursive retry or just returning null for the caller to handle
+    return null;
   }
-  
-  await this.save();
-  return assignedBoy;
+
+  return updatedShop.deliveryBoys.id(pickedBoy._id);
 };
 
 module.exports = mongoose.model('Shop', shopSchema);
