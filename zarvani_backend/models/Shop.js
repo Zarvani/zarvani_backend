@@ -448,7 +448,7 @@ shopSchema.methods.isShopOpenNow = function () {
 };
 
 // Method to assign delivery boy (Hardened to prevent race conditions)
-shopSchema.methods.assignDeliveryBoy = async function (orderId) {
+shopSchema.methods.assignDeliveryBoy = async function (orderId, session = null) {
   // 1. Find available boys in memory first to pick one
   const availableBoys = this.deliveryBoys.filter(boy =>
     boy.status === 'active' && boy.isActive
@@ -462,12 +462,14 @@ shopSchema.methods.assignDeliveryBoy = async function (orderId) {
 
   // 2. Perform ATOMIC update on the database to verify he's still available
   // This prevents two simultaneous orders from being assigned to the same "free" slot
+  const updateOptions = {
+    _id: this._id,
+    'deliveryBoys._id': pickedBoy._id,
+    'deliveryBoys.status': 'active' // Ensure he hasn't been picked by another process
+  };
+  
   const updatedShop = await this.constructor.findOneAndUpdate(
-    {
-      _id: this._id,
-      'deliveryBoys._id': pickedBoy._id,
-      'deliveryBoys.status': 'active' // Ensure he hasn't been picked by another process
-    },
+    updateOptions,
     {
       $push: { 'deliveryBoys.$.assignedOrders': orderId },
       $set: {
@@ -475,7 +477,7 @@ shopSchema.methods.assignDeliveryBoy = async function (orderId) {
         'deliveryBoys.$.lastAssignedAt': new Date()
       }
     },
-    { new: true }
+    { new: true, session }
   );
 
   if (!updatedShop) {
