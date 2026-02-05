@@ -164,11 +164,12 @@ class OrderService {
 
             await order.save({ session });
             await session.commitTransaction();
+            session.endSession();
 
-            // 7. Invalidate order cache
+            // 7. Invalidate order cache (outside transaction)
             await CacheInvalidationService.invalidateOrder(order).catch(e => logger.error(`Cache invalidation error: ${e.message}`));
 
-            // 8. Trigger Notifications
+            // 8. Trigger Notifications (outside transaction)
             NotificationService.send({
                 recipient: shopId,
                 recipientType: 'Shop',
@@ -182,9 +183,8 @@ class OrderService {
 
         } catch (error) {
             await session.abortTransaction();
-            throw error;
-        } finally {
             session.endSession();
+            throw error;
         }
     }
 
@@ -198,7 +198,7 @@ class OrderService {
         await order.save();
 
         // Invalidate cache
-        await this.invalidateOrderCache(order).catch(e => logger.error(`Cache invalidation error: ${e.message}`));
+        await CacheInvalidationService.invalidateOrder(order).catch(e => logger.error(`Cache invalidation error: ${e.message}`));
 
         NotificationService.send({
             recipient: order.user,
@@ -224,7 +224,7 @@ class OrderService {
             if (!order) throw new Error('Order not found or already processed');
 
             const shop = await Shop.findById(shopId).session(session);
-            const deliveryBoy = await shop.assignDeliveryBoy(orderId);
+            const deliveryBoy = await shop.assignDeliveryBoy(orderId, session);
             if (!deliveryBoy) throw new Error('No delivery boy available');
 
             order.status = 'confirmed';
@@ -237,10 +237,12 @@ class OrderService {
 
             await order.save({ session });
             await session.commitTransaction();
+            session.endSession();
 
-            // Invalidate cache
-            await this.invalidateOrderCache(order).catch(e => logger.error(`Cache invalidation error: ${e.message}`));
+            // Invalidate cache (outside transaction)
+            await CacheInvalidationService.invalidateOrder(order).catch(e => logger.error(`Cache invalidation error: ${e.message}`));
 
+            // Send notification (outside transaction)
             NotificationService.send({
                 recipient: order.user,
                 recipientType: 'User',
@@ -253,9 +255,8 @@ class OrderService {
             return order;
         } catch (error) {
             await session.abortTransaction();
-            throw error;
-        } finally {
             session.endSession();
+            throw error;
         }
     }
 
@@ -285,10 +286,12 @@ class OrderService {
 
             await order.save({ session });
             await session.commitTransaction();
+            session.endSession();
 
-            // Invalidate cache
-            await this.invalidateOrderCache(order).catch(e => logger.error(`Cache invalidation error: ${e.message}`));
+            // Invalidate cache (outside transaction)
+            await CacheInvalidationService.invalidateOrder(order).catch(e => logger.error(`Cache invalidation error: ${e.message}`));
 
+            // Send notification (outside transaction)
             NotificationService.send({
                 recipient: order.user,
                 recipientType: 'User',
@@ -301,9 +304,8 @@ class OrderService {
             return order;
         } catch (error) {
             await session.abortTransaction();
-            throw error;
-        } finally {
             session.endSession();
+            throw error;
         }
     }
 
