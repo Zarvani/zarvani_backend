@@ -1,6 +1,7 @@
 // ============= controllers/shopController.js =============
 const Shop = require('../models/Shop');
 const Product = require("../models/Product")
+const Order = require('../models/Order');
 const ResponseHandler = require('../utils/responseHandler');
 const { deleteFromCloudinary } = require('../middleware/uploadMiddleware');
 const GeoService = require('../services/geoService');
@@ -479,6 +480,110 @@ exports.getDeliveryBoyStats = async (req, res) => {
   }
 };
 
+// ========================== SHOP DASHBOARD ==========================
+exports.getDashboard = async (req, res) => {
+  try {
+    const shopId = req.user._id;
+
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    // Products counts
+    const [totalProducts, activeProducts] = await Promise.all([
+      Product.countDocuments({ shop: shopId }),
+      Product.countDocuments({ shop: shopId, isAvailable: true })
+    ]);
+
+    // Orders counts
+    const [pendingOrders, preparingOrders, outForDelivery] = await Promise.all([
+      Order.countDocuments({ shop: shopId, status: 'pending' }),
+      Order.countDocuments({ shop: shopId, status: 'preparing' }),
+      Order.countDocuments({ shop: shopId, status: 'out_for_delivery' })
+    ]);
+
+    // Delivered today and today's revenue
+    const deliveredTodayAgg = await Order.aggregate([
+      { $match: { shop: shopId, status: 'delivered', 'timestamps.deliveredAt': { $gte: todayStart } } },
+      { $group: { _id: null, count: { $sum: 1 }, revenue: { $sum: '$pricing.totalAmount' } } }
+    ]);
+
+    const deliveredToday = deliveredTodayAgg[0]?.count || 0;
+    const totalRevenue = deliveredTodayAgg[0]?.revenue || 0;
+
+    // Average shop rating
+    const shop = await Shop.findById(shopId).select('ratings').lean();
+    const averageRating = shop?.ratings?.average || 0;
+
+    // Recent orders (latest 8)
+    const recentOrdersRaw = await Order.find({ shop: shopId })
+      .sort({ 'timestamps.placedAt': -1 })
+      .limit(8)
+      .select('orderId status customerInfo items pricing')
+      .lean();
+
+    const recentOrders = recentOrdersRaw.map(o => ({
+      _id: o._id,
+      orderId: o.orderId,
+      status: o.status,
+      customerName: o.customerInfo?.name || '',
+      itemsCount: Array.isArray(o.items) ? o.items.length : 0,
+      totalAmount: o.pricing?.totalAmount || 0
+    }));
+
+    // Top products today (by quantity sold)
+    const topProductsAgg = await Order.aggregate([
+      { $match: { shop: shopId, 'timestamps.placedAt': { $gte: todayStart } } },
+      { $unwind: '$items' },
+      { $group: { _id: '$items.product', soldToday: { $sum: '$items.quantity' }, revenue: { $sum: '$items.total' } } },
+      { $sort: { soldToday: -1 } },
+      { $limit: 10 },
+      { $lookup: { from: 'products', localField: '_id', foreignField: '_id', as: 'product' } },
+      { $unwind: { path: '$product', preserveNullAndEmptyArrays: true } },
+      { $project: { _id: '$_id', soldToday: 1, revenue: 1, name: '$product.name', category: '$product.category', image: { $arrayElemAt: ['$product.images.url', 0] } } }
+    ]);
+
+    const topProducts = topProductsAgg.map(p => ({
+      _id: p._id,
+      name: p.name || 'Unknown',
+      category: p.category || 'Uncategorized',
+      soldToday: p.soldToday || 0,
+      revenue: p.revenue || 0,
+      image: p.image || null
+    }));
+
+    // Delivery boys stats
+    const shopDoc = await Shop.findById(shopId).select('deliveryBoys').lean();
+    const deliveryBoyStats = (shopDoc?.deliveryBoys || []).map(b => ({
+      _id: b._id,
+      name: b.name,
+      phone: b.phone,
+      status: b.status,
+      assignedOrders: Array.isArray(b.assignedOrders) ? b.assignedOrders.length : 0
+    }));
+
+    const response = {
+      stats: {
+        totalProducts,
+        activeProducts,
+        pendingOrders,
+        preparingOrders,
+        outForDelivery,
+        deliveredToday,
+        totalRevenue,
+        averageRating
+      },
+      recentOrders,
+      topProducts,
+      deliveryBoyStats
+    };
+
+    ResponseHandler.success(res, response, 'Shop dashboard fetched successfully');
+  } catch (error) {
+    logger.error(`Get dashboard error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
 // Add Product
 exports.addProduct = async (req, res) => {
   try {
@@ -669,7 +774,7 @@ exports.getOrders = async (req, res) => {
     await batchLoadAndAttach(
       orders,
       'user',
-      require('../models/User'),
+      User,
       'user',
       'name email phone profilePicture'
     );

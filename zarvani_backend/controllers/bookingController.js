@@ -1,11 +1,18 @@
 const Booking = require('../models/Booking');
 const ServiceProvider = require('../models/ServiceProvider');
+const Service = require('../models/Service');
+const User = require('../models/User');
+const Payment = require('../models/Payment');
+const Notification = require('../models/Notification');
 const ResponseHandler = require('../utils/responseHandler');
 const BookingService = require('../services/bookingService');
 const logger = require('../utils/logger');
 const mongoose = require("mongoose");
 const CacheService = require('../services/cacheService');
 const CacheInvalidationService = require('../services/cacheInvalidationService');
+const GeoService = require('../services/geoService');
+const PushNotificationService = require('../services/pushNotification');
+const CommissionService = require('../services/commissionService');
 const { batchLoadAndAttach } = require('../utils/batchLoader');
 
 const searchQueue = require('../queues/searchQueue');
@@ -360,7 +367,7 @@ exports.getPendingRequests = async (req, res) => {
     await batchLoadAndAttach(
       bookings,
       'user',
-      require('../models/User'),
+      User,
       'user',
       'name phone profilePicture'
     );
@@ -375,7 +382,6 @@ exports.getPendingRequests = async (req, res) => {
     );
 
     // Enhance booking data
-    const GeoService = require('../services/geoService');
     const enhancedBookings = bookings.map((booking) => {
       const userLocation = booking.address?.location?.coordinates || [0, 0];
 
@@ -724,7 +730,7 @@ exports.getProviderBookings = async (req, res) => {
     await batchLoadAndAttach(
       bookings,
       'user',
-      require('../models/User'),
+      User,
       'user',
       'name phone address'
     );

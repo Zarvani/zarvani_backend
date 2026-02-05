@@ -3,10 +3,9 @@ const User = require('../models/User');
 const Booking = require("../models/Booking")
 const { Review } = require('../models/Review');
 const ResponseHandler = require('../utils/responseHandler');
-const { Service } = require('../models/Service');
 const { deleteFromCloudinary } = require('../middleware/uploadMiddleware');
 const GeoService = require('../services/geoService');
-
+const Service = require('../models/Service'); 
 // Get User Profile
 exports.getProfile = async (req, res) => {
   try {
