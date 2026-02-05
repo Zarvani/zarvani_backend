@@ -584,7 +584,7 @@ exports.cancelOrder = async (req, res) => {
     await session.commitTransaction();
 
     // Invalidate cache
-    await invalidateOrderCache(order).catch(e => logger.error(`Cache invalidation error: ${e.message}`));
+    await CacheInvalidationService.invalidateOrder(order).catch(e => logger.error(`Cache invalidation error: ${e.message}`));
 
     // Send notifications
     await PushNotificationService.sendToShop(
@@ -699,7 +699,7 @@ exports.shopCancelOrder = async (req, res) => {
     await session.commitTransaction();
 
     // Invalidate cache
-    await invalidateOrderCache(order).catch(e => logger.error(`Cache invalidation error: ${e.message}`));
+    await CacheInvalidationService.invalidateOrder(order).catch(e => logger.error(`Cache invalidation error: ${e.message}`));
 
     // Send notifications
     await PushNotificationService.sendToUser(
