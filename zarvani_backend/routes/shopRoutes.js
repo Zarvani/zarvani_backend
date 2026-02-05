@@ -36,4 +36,6 @@ router.post(
 
 // Get delivery boys stats
 router.get('/delivery-boys/:id/stats', shopController.getDeliveryBoyStats);
+// Shop dashboard
+router.get('/dashboard', shopController.getDashboard);
 module.exports = router;

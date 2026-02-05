@@ -5,7 +5,7 @@ const ResponseHandler = require('../utils/responseHandler');
 // ======================= GET CART =======================
 exports.getCart = async (req, res) => {
   try {
-    const cart = await Cart.getUserCart(req.user.id);
+    const cart = await Cart.getUserCart(req.user._id);
     return ResponseHandler.success(res, cart, 'Cart fetched successfully');
   } catch (error) {
     return ResponseHandler.error(res, error.message, 500);
@@ -26,12 +26,12 @@ exports.addToCart = async (req, res) => {
       return ResponseHandler.error(res, 'Product not found', 404);
     }
 
-    let cart = await Cart.findOne({ user: req.user.id });
+    let cart = await Cart.findOne({ user: req.user._id });
 
     // If no cart, create one
     if (!cart) {
       cart = new Cart({
-        user: req.user.id,
+        user: req.user._id,
         shop: product.shop,
         items: []
       });
@@ -74,7 +74,7 @@ exports.updateQuantity = async (req, res) => {
       return ResponseHandler.error(res, 'Quantity must be at least 1', 400);
     }
 
-    const cart = await Cart.findOne({ user: req.user.id });
+    const cart = await Cart.findOne({ user: req.user._id });
     if (!cart) {
       return ResponseHandler.error(res, 'Cart not found', 404);
     }
@@ -96,7 +96,7 @@ exports.removeFromCart = async (req, res) => {
   try {
     const { productId } = req.params;
 
-    const cart = await Cart.findOne({ user: req.user.id });
+    const cart = await Cart.findOne({ user: req.user._id });
     if (!cart) {
       return ResponseHandler.error(res, 'Cart not found', 404);
     }
@@ -120,7 +120,7 @@ exports.removeFromCart = async (req, res) => {
 // ======================= CLEAR CART =======================
 exports.clearCart = async (req, res) => {
   try {
-    const cart = await Cart.findOne({ user: req.user.id });
+    const cart = await Cart.findOne({ user: req.user._id });
 
     if (!cart) {
       return ResponseHandler.error(res, 'Cart not found', 404);
@@ -137,7 +137,7 @@ exports.clearCart = async (req, res) => {
 // ======================= CART COUNT =======================
 exports.getCartCount = async (req, res) => {
   try {
-    const cart = await Cart.findOne({ user: req.user.id });
+    const cart = await Cart.findOne({ user: req.user._id });
     const count = cart ? cart.itemCount : 0;
 
     return ResponseHandler.success(res, { count }, 'Cart count fetched');
@@ -149,7 +149,7 @@ exports.getCartCount = async (req, res) => {
 // ======================= CART SUMMARY =======================
 exports.getCartSummary = async (req, res) => {
   try {
-    const cart = await Cart.findOne({ user: req.user.id });
+    const cart = await Cart.findOne({ user: req.user._id });
 
     if (!cart) {
       return ResponseHandler.error(res, 'Cart not found', 404);

@@ -920,7 +920,8 @@ exports.logout = async (req, res) => {
 // Get Current User
 exports.getCurrentUser = async (req, res) => {
   try {
-    const { id, role } = req.user;
+    const id = req.user._id || req.user.id;
+    const role = req.userRole || req.user.role;
 
     if (!id || !role) {
       return ResponseHandler.error(res, "Invalid token", 401);

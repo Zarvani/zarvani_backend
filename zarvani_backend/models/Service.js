@@ -103,4 +103,4 @@ const serviceSchema = new mongoose.Schema({
 
 serviceSchema.index({ location: '2dsphere' });
 
-module.exports = { Service: mongoose.model('Service', serviceSchema) };
+module.exports = mongoose.model('Service', serviceSchema)
