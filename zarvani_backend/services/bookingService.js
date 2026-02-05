@@ -1,7 +1,7 @@
 // ============= services/bookingService.js =============
 const Booking = require('../models/Booking');
 const ServiceProvider = require('../models/ServiceProvider');
-const { Service } = require("../models/Service");
+const Service = require("../models/Service");
 const Product = require("../models/Product");
 const NotificationService = require('./notificationService');
 const GeoService = require('./geoService');
