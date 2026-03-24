@@ -198,8 +198,16 @@ const serviceProviderSchema = new mongoose.Schema({
     default: false
   },
   lastLogin: Date,
+  loginAttempts: { type: Number, default: 0 },
+  lockUntil: Date,
+  sessions: [{
+    refreshToken: String,
+    device: String,
+    ip: String,
+    createdAt: { type: Date, default: Date.now }
+  }],
   otp: {
-    code: String,
+    code: String, // Store SHA-256 hash
     expiresAt: Date,
     attempts: { type: Number, default: 0 }
   },
@@ -227,12 +235,20 @@ serviceProviderSchema.methods.comparePassword = async function (enteredPassword)
   return await bcrypt.compare(enteredPassword, this.password);
 };
 
+// Check if locked
+serviceProviderSchema.methods.isLocked = function() {
+  return !!(this.lockUntil && this.lockUntil > Date.now());
+};
+
 // Generate OTP
 serviceProviderSchema.methods.generateOTP = function () {
   const crypto = require('crypto');
   const otp = crypto.randomInt(100000, 999999).toString();
+  
+  const hashedOtp = crypto.createHash('sha256').update(otp).digest('hex');
+
   this.otp = {
-    code: otp,
+    code: hashedOtp,
     expiresAt: new Date(Date.now() + 10 * 60 * 1000),
     attempts: 0
   };
@@ -244,7 +260,10 @@ serviceProviderSchema.methods.verifyOTP = function (enteredOTP) {
   if (!this.otp || !this.otp.code || this.otp.expiresAt < new Date() || this.otp.attempts >= 5) {
     return false;
   }
-  return this.otp.code === enteredOTP;
+  const crypto = require('crypto');
+  const hashedEnteredOTP = crypto.createHash('sha256').update(enteredOTP).digest('hex');
+
+  return this.otp.code === hashedEnteredOTP;
 };
 
 module.exports = mongoose.model('ServiceProvider', serviceProviderSchema);

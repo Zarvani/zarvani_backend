@@ -1,6 +1,22 @@
 const logger = require('../utils/logger');
 
 /**
+ * Simple Circuit Breaker Wrapper
+ * Prevents application crashes if Redis becomes unresponsive
+ */
+const circuitBreaker = {
+    execute: async (name, operation, fallback) => {
+        try {
+            return await operation();
+        } catch (error) {
+            logger.error(`CircuitBreaker (${name}) Error: ${error.message}`);
+            if (fallback) return await fallback();
+            return null;
+        }
+    }
+};
+
+/**
  * Cache Service for Redis
  * Provides caching functionality with automatic JSON serialization
  * Supports TTL, invalidation, and pattern-based deletion
@@ -29,17 +45,17 @@ class CacheService {
     async get(key) {
         if (!this.enabled || !this.redis) return null;
 
-        try {
+        return await circuitBreaker.execute('redis', async () => {
             const data = await this.redis.get(key);
             if (!data) return null;
 
             const parsed = JSON.parse(data);
             logger.debug(`Cache HIT: ${key}`);
             return parsed;
-        } catch (error) {
-            logger.error(`Cache GET error for key ${key}: ${error.message}`);
+        }, async () => {
+            logger.warn(`Redis Circuit OPEN: Cache MISS for ${key}`);
             return null;
-        }
+        });
     }
 
     /**
@@ -52,15 +68,15 @@ class CacheService {
     async set(key, value, ttl = 300) {
         if (!this.enabled || !this.redis) return false;
 
-        try {
+        return await circuitBreaker.execute('redis', async () => {
             const serialized = JSON.stringify(value);
             await this.redis.setex(key, ttl, serialized);
             logger.debug(`Cache SET: ${key} (TTL: ${ttl}s)`);
             return true;
-        } catch (error) {
-            logger.error(`Cache SET error for key ${key}: ${error.message}`);
+        }, async () => {
+            logger.warn(`Redis Circuit OPEN: Skipping SET for ${key}`);
             return false;
-        }
+        });
     }
 
     /**
@@ -71,18 +87,19 @@ class CacheService {
     async del(key) {
         if (!this.enabled || !this.redis) return false;
 
-        try {
+        return await circuitBreaker.execute('redis', async () => {
             await this.redis.del(key);
             logger.debug(`Cache DEL: ${key}`);
             return true;
-        } catch (error) {
-            logger.error(`Cache DEL error for key ${key}: ${error.message}`);
+        }, async () => {
+            logger.warn(`Redis Circuit OPEN: Skipping DEL for ${key}`);
             return false;
-        }
+        });
     }
 
     /**
      * Delete multiple keys matching pattern
+     * Safely uses SCAN instead of KEYS to prevent Redis blocking
      * @param {string} pattern - Pattern to match (e.g., 'user:*')
      * @returns {Promise<number>} Number of keys deleted
      */
@@ -90,12 +107,27 @@ class CacheService {
         if (!this.enabled || !this.redis) return 0;
 
         try {
-            const keys = await this.redis.keys(pattern);
-            if (keys.length === 0) return 0;
+            let cursor = '0';
+            const keysToDelete = [];
 
-            await this.redis.del(...keys);
-            logger.debug(`Cache DEL pattern: ${pattern} (${keys.length} keys)`);
-            return keys.length;
+            do {
+                const result = await this.redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
+                // The structure of result might be [cursor, [keys]] depending on redis client version (ioredis vs node-redis)
+                // Assuming ioredis format:
+                cursor = result[0];
+                const matchedKeys = result[1];
+                
+                if (matchedKeys && matchedKeys.length > 0) {
+                    keysToDelete.push(...matchedKeys);
+                }
+            } while (cursor !== '0');
+
+            if (keysToDelete.length === 0) return 0;
+
+            // Delete in batches if necessary, but native .del handles arrays well
+            await this.redis.del(...keysToDelete);
+            logger.debug(`Cache DEL pattern: ${pattern} (${keysToDelete.length} keys)`);
+            return keysToDelete.length;
         } catch (error) {
             logger.error(`Cache DEL pattern error for ${pattern}: ${error.message}`);
             return 0;

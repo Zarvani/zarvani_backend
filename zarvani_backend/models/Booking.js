@@ -26,7 +26,11 @@ const bookingSchema = new mongoose.Schema({
     title: String,
     price: Number,
     duration: Number,
-    category: String
+    category: String,
+    taxAmount: { type: Number, default: 0 },
+    serviceFee: { type: Number, default: 0 },
+    basePrice: Number,
+    discountAmount: Number
   },
   scheduledDate: {
     type: Date,
@@ -130,10 +134,10 @@ const bookingSchema = new mongoose.Schema({
     type: String,
     enum: ['user', 'provider', 'shop', 'admin', 'system']
   },
- payment: {
+  payment: {
     method: {
       type: String,
-      enum: ['cod', 'online', 'wallet', 'upi', 'cash', 'personal_upi'],
+      enum: ['cod', 'online'],
       default: 'cod'
     },
     status: {
@@ -200,5 +204,12 @@ bookingSchema.index({ 'address.location': '2dsphere' });
 bookingSchema.index({ status: 1, createdAt: -1 });
 bookingSchema.index({ user: 1, status: 1 });
 bookingSchema.index({ provider: 1, status: 1 });
+
+bookingSchema.pre('save', function(next) {
+  if (this.isNew && this.payment.method === 'cod') {
+    this.payment.confirmationPIN = Math.floor(100000 + Math.random() * 900000).toString();
+  }
+  next();
+});
 
 module.exports = mongoose.model('Booking', bookingSchema);

@@ -10,6 +10,7 @@ const Payment = require("../models/Payment");
 
 const NotificationService = require("./notificationService");
 const CommissionService = require("./commissionService");
+const { circuitBreaker } = require("../middleware/circuitBreaker");
 const logger = require("../utils/logger");
 
 class PaymentService {
@@ -17,7 +18,7 @@ class PaymentService {
    * Create Razorpay Order
    */
   static async createRazorpayOrder(amount, currency = "INR", receipt) {
-    try {
+    return await circuitBreaker.execute('razorpay', async () => {
       const auth = Buffer.from(
         `${process.env.RAZORPAY_KEY_ID}:${process.env.RAZORPAY_KEY_SECRET}`
       ).toString("base64");
@@ -38,17 +39,13 @@ class PaymentService {
       );
 
       return { success: true, order: response.data };
-    } catch (error) {
-      logger.error(
-        `Razorpay order creation error: ${error.response?.data?.error?.description || error.message
-        }`
-      );
-      return {
-        success: false,
-        error:
-          error.response?.data?.error?.description || error.message,
+    }, async () => {
+      return { 
+        success: false, 
+        error: "Payment gateway is currently under heavy load. Please try Cash on Delivery or try again in a moment.",
+        isCritical: true 
       };
-    }
+    });
   }
 
   /**
@@ -71,7 +68,7 @@ class PaymentService {
       bookingId,
       orderId,
       amount,
-      paymentDestination = "company_account",
+      paymentDestination = "company_account", // ALWAYS force company_account for online
     } = data;
 
     if (!bookingId && !orderId) {

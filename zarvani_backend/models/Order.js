@@ -146,8 +146,12 @@ const orderSchema = new mongoose.Schema({
   payment: {
     method: {
       type: String,
-      enum: ['cod', 'online', 'wallet', 'upi', 'cash', 'personal_upi'],
+      enum: ['cod', 'online'],
       required: true
+    },
+    confirmationPIN: {
+      type: String,
+      select: false
     },
     status: {
       type: String,
@@ -367,6 +371,13 @@ orderSchema.pre('save', function (next) {
   }
 
   next();
+});
+
+orderSchema.pre('save', function (next) {
+    if (this.isNew && this.payment.method === 'cod') {
+        this.payment.confirmationPIN = Math.floor(100000 + Math.random() * 900000).toString();
+    }
+    next();
 });
 
 // Method to update delivery boy location

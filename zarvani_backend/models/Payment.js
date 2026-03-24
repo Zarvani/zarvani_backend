@@ -273,7 +273,7 @@ const paymentSchema = new mongoose.Schema({
     // ==================== PAYMENT DETAILS ====================
     paymentMethod: {
         type: String,
-        enum: ['online', 'cash', 'cod', 'upi', 'card', 'netbanking', 'wallet', 'qr'],
+        enum: ['online', 'cod'],
         required: true
     },
 

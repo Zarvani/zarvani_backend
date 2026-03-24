@@ -13,6 +13,8 @@ const CacheInvalidationService = require('../services/cacheInvalidationService')
 const GeoService = require('../services/geoService');
 const PushNotificationService = require('../services/pushNotification');
 const CommissionService = require('../services/commissionService');
+const DistributedLock = require('../utils/distributedLock');
+const AuditLogger = require('../utils/auditLogger');
 const { batchLoadAndAttach } = require('../utils/batchLoader');
 
 const searchQueue = require('../queues/searchQueue');
@@ -45,10 +47,28 @@ exports.createBooking = async (req, res) => {
 
 // ========================== PROVIDER ACCEPTS BOOKING ==========================
 exports.acceptBooking = async (req, res) => {
+  const lockKey = `booking-accept:${req.params.id}`;
+  const token = await DistributedLock.acquire(lockKey, 10000); // 10s lock
+
+  if (!token) {
+    return ResponseHandler.error(res, 'Another provider is currently trying to accept this booking. Please try again.', 409);
+  }
+
   try {
     const booking = await BookingService.acceptBooking(req.params.id, req.user._id, req.app);
+    await DistributedLock.release(lockKey, token);
+
+    // ⚡ ENTERPRISE: Audit Log
+    await AuditLogger.log(req, {
+      action: 'BOOKING_ACCEPTED',
+      resource: { id: booking._id, model: 'Booking', identifier: booking.bookingId },
+      changes: { before: { status: 'searching' }, after: { status: 'provider-assigned', provider: req.user._id } },
+      severity: 'medium'
+    });
+
     return ResponseHandler.success(res, { booking }, 'Booking accepted successfully');
   } catch (error) {
+    await DistributedLock.release(lockKey, token);
     logger.error(`Accept booking error: ${error.message}`);
     ResponseHandler.error(res, error.message, 500);
   }
@@ -137,91 +157,35 @@ exports.updateProviderLocation = async (req, res) => {
 exports.markBookingPaid = async (req, res) => {
   try {
     const { bookingId } = req.params;
-    const { paymentMethod = 'cash', transactionId } = req.body;
-    const providerId = req.user._id;
-    const booking = await Booking.findOne({
-      _id: bookingId,
-      provider: providerId,
-      status: { $in: ['completed', 'in-progress'] }
-    });
+    const { paymentMethod = 'cod', transactionId, confirmationPIN } = req.body;
+
+    // Verify original booking
+    const booking = await Booking.findById(bookingId).select('+payment.confirmationPIN');
     if (!booking) {
-      return ResponseHandler.error(res, 'Booking not found or not authorized', 404);
+      return ResponseHandler.error(res, 'Booking not found', 404);
     }
 
-    // 2️⃣ If payment already done (online at booking time), skip payment logic
-    if (booking.payment?.status === 'paid') {
-      booking.status = 'completed';  // mark service as completed
-      booking.completedAt = new Date();
-
-      await booking.save();
-
-      return ResponseHandler.success(res, {
-        booking,
-        commission: null
-      }, 'Service completed successfully');
+    // ⚡ ENTERPRISE: PIN Verification for COD
+    if (booking.payment.method === 'cod' && booking.payment.confirmationPIN) {
+        if (confirmationPIN !== booking.payment.confirmationPIN) {
+            return ResponseHandler.error(res, 'Invalid confirmation PIN. Customer must provide the 6-digit PIN to complete payment.', 403);
+        }
     }
 
-    const personalPaymentMethods = ['cash', 'personal_upi', 'cod'];
-    const isPersonalPayment = personalPaymentMethods.includes(paymentMethod);
-    booking.payment.method = paymentMethod;
-    booking.payment.status = 'paid';
-    booking.payment.paidAt = new Date();
-    booking.payment.receivedBy = isPersonalPayment ? 'provider' : 'company';
-    if (transactionId) {
-      booking.payment.transactionId = transactionId;
-    }
-    const payment = await Payment.create({
-      transactionId: transactionId || `PAY-${Date.now()}`,
-      booking: booking._id,
-      user: booking.user,
-      provider: providerId,
-      amount: booking.totalAmount,
-      paymentMethod: paymentMethod,
-      paymentDestination: isPersonalPayment ? 'personal_account' : 'company_account',
-      paymentType: 'service',
-      status: 'success',
-      paymentDate: new Date()
+    const previousStatus = booking.payment.status;
+    const result = await BookingService.updateStatus(bookingId, req.user._id, { status: 'completed' }, req.app);
+
+    // ⚡ ENTERPRISE: Audit Log
+    await AuditLogger.log(req, {
+      action: 'BOOKING_PAYMENT_COMPLETED',
+      resource: { id: booking._id, model: 'Booking', identifier: booking.bookingId },
+      changes: { before: { paymentStatus: previousStatus }, after: { paymentStatus: 'paid' } },
+      severity: 'medium'
     });
 
-    // 6️⃣ Handle commission
-    if (isPersonalPayment) {
-      // Track pending commission
-      await CommissionService.trackPersonalPayment(payment);
-
-      booking.payment.commissionStatus = 'pending';
-      booking.payment.commissionAmount = payment.commission.pendingCommission;
-      booking.payment.commissionDueDate = payment.pendingCommission.dueDate;
-    } else {
-      // Auto payout for company payment
-      await CommissionService.processAutoPayout(payment);
-      booking.payment.commissionStatus = 'not_applicable';
-    }
-
-    // 7️⃣ Update service status
-    booking.status = 'completed';
-    booking.completedAt = new Date();
-
-    await booking.save();
-
-    // 8️⃣ Send notification to user
-    await PushNotificationService.sendToUser(
-      booking.user,
-      'Payment Received ✅',
-      `Payment of ₹${booking.totalAmount} has been received for your ${booking.serviceDetails?.title || 'booking'}.`
-    );
-
-    // 9️⃣ Return response
-    ResponseHandler.success(res, {
-      booking,
-      commission: isPersonalPayment ? {
-        amount: payment.commission.pendingCommission,
-        dueDate: payment.pendingCommission.dueDate,
-        status: 'pending'
-      } : null
-    }, 'Payment recorded successfully');
-
+    return ResponseHandler.success(res, { booking: result }, 'Booking marked as paid and completed');
   } catch (error) {
-    logger.error(`Mark booking paid error: ${error.message}`);
+    logger.error(`Mark paid error: ${error.message}`);
     ResponseHandler.error(res, error.message, 500);
   }
 };
@@ -253,13 +217,46 @@ exports.getProviderCommissionSummary = async (req, res) => {
     ResponseHandler.error(res, error.message, 500);
   }
 };
-// ========================== UPDATE BOOKING STATUS ==========================
 exports.updateBookingStatus = async (req, res) => {
   try {
     const bookingId = req.params.id;
     const providerId = req.user._id;
+    const { status, latitude, longitude } = req.body;
 
+    // ⚡ ENTERPRISE: Geo-fenced Fraud Detection
+    if (['reached', 'completed'].includes(status)) {
+      const booking = await Booking.findById(bookingId);
+      if (booking && latitude && longitude) {
+        const userLocation = booking.address.location.coordinates;
+        const distance = GeoService.calculateDistance(
+          latitude, longitude, userLocation[1], userLocation[0]
+        );
+
+        if (distance > 0.5) { // 500 meters
+          // Audit Log the attempt
+          await AuditLogger.log(req, {
+            action: 'FRAUD_ATTEMPT_GEO_FAILURE',
+            resource: { id: booking._id, model: 'Booking', identifier: booking.bookingId },
+            changes: { before: { status: booking.status }, after: { attemptedStatus: status, distance } },
+            severity: 'high'
+          });
+
+          return ResponseHandler.error(res, `Fraud Protection: You must be within 500m of the customer to mark as ${status}. Current distance: ${distance.toFixed(2)}km`, 403);
+        }
+      }
+    }
+
+    const previousBooking = await Booking.findById(bookingId);
     const booking = await BookingService.updateStatus(bookingId, providerId, req.body, req.app);
+
+    // ⚡ ENTERPRISE: Audit Log for Status Change
+    await AuditLogger.log(req, {
+      action: 'BOOKING_STATUS_CHANGED',
+      resource: { id: booking._id, model: 'Booking', identifier: booking.bookingId },
+      changes: { before: { status: previousBooking.status }, after: { status: booking.status } },
+      severity: 'low'
+    });
+
     ResponseHandler.success(res, { booking }, 'Status updated successfully');
   } catch (error) {
     logger.error(`Update status error: ${error.message}`);

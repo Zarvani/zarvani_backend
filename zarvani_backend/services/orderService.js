@@ -80,6 +80,7 @@ class OrderService {
 
             let itemsTotal = 0;
             let savings = 0;
+            let totalTaxAmount = 0;
             const orderItems = [];
 
 
@@ -103,9 +104,11 @@ class OrderService {
 
                 const itemTotal = product.price.sellingPrice * item.quantity;
                 const itemSavings = (product.price.mrp - product.price.sellingPrice) * item.quantity;
+                const itemTax = (itemTotal * (product.price.taxRate || 0)) / 100;
 
                 itemsTotal += itemTotal;
                 savings += itemSavings;
+                totalTaxAmount += itemTax;
 
                 orderItems.push({
                     product: product._id,
@@ -113,6 +116,7 @@ class OrderService {
                     image: product.images[0]?.url,
                     quantity: item.quantity,
                     price: product.price,
+                    taxAmount: itemTax,
                     total: itemTotal,
                     weight: product.weight
                 });
@@ -125,7 +129,7 @@ class OrderService {
             // 4. Final Pricing Logic
             const deliveryFee = this.calculateDeliveryFee(shop, distance, itemsTotal);
             const packagingCharge = shop.deliverySettings.packagingCharge || 0;
-            const tax = Math.round(itemsTotal * 0.05); // 5% GST
+            const tax = Math.round(totalTaxAmount);
             const discountAmount = couponCode ? 0 : 0; // TODO: Implement proper coupon service
 
             const subtotal = itemsTotal + deliveryFee + packagingCharge + tax - discountAmount;
@@ -166,6 +170,12 @@ class OrderService {
             await session.commitTransaction();
             session.endSession();
 
+            // ✅ START STOCK TTL (Auto-release if not paid in 10 mins)
+            if (paymentMethod === 'cod') {
+                const { addStockReleaseJob } = require('../queues/stockTtlQueue');
+                addStockReleaseJob(order._id, 10 * 60 * 1000);
+            }
+
             // 7. Invalidate order cache (outside transaction)
             await CacheInvalidationService.invalidateOrder(order).catch(e => logger.error(`Cache invalidation error: ${e.message}`));
 
@@ -178,6 +188,16 @@ class OrderService {
                 message: `Order #${order.orderId} received for ₹${totalAmount}`,
                 data: { orderId: order._id }
             }, app).catch(e => logger.error(`Shop Notify Error: ${e.message}`));
+
+            // 9. Automated Post-Purchase "Offer" Notification to User
+            NotificationService.send({
+                recipient: userId,
+                recipientType: 'User',
+                type: 'alert',
+                title: '🎉 Order Confirmed! ',
+                message: `Thanks for ordering! `,
+                data: { orderId: order._id, type: 'post_purchase_offer' }
+            }, app).catch(e => logger.error(`User Notify Error: ${e.message}`));
 
             return order;
 

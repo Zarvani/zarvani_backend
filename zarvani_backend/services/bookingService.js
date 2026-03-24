@@ -24,13 +24,17 @@ class BookingService {
         const { userId, body } = data;
         const {
             service, scheduledDate, scheduledTime, isImmediate,
-            address, products, notes, phone
+            address, products, notes, phone, paymentMethod
         } = body;
 
         const serviceData = await Service.findById(service);
         if (!serviceData) throw new Error('Service not found');
 
-        let totalAmount = serviceData.pricing.discountedPrice || serviceData.pricing.basePrice;
+        const basePrice = serviceData.pricing.discountedPrice || serviceData.pricing.basePrice;
+        const discountAmount = serviceData.pricing.basePrice - basePrice;
+        
+        let subtotal = basePrice;
+
         if (products?.length > 0) {
             const productIds = products.map(p => p.product);
             const productDocs = await Product.find({ _id: { $in: productIds } });
@@ -38,9 +42,16 @@ class BookingService {
 
             for (const item of products) {
                 const prod = productMap.get(item.product.toString());
-                if (prod) totalAmount += prod.price.sellingPrice * item.quantity;
+                if (prod) subtotal += prod.price.sellingPrice * item.quantity;
             }
         }
+
+        // Apply dynamic tax and service fees
+        const taxRate = serviceData.pricing.taxRate || 0;
+        const serviceFee = serviceData.pricing.serviceFee || 0;
+        
+        const taxAmount = (subtotal * taxRate) / 100;
+        const totalAmount = subtotal + taxAmount + serviceFee;
 
         const bookingId = `BK${Date.now()}${Math.floor(Math.random() * 1000)}`;
         const booking = await Booking.create({
@@ -51,7 +62,11 @@ class BookingService {
                 title: serviceData.title,
                 price: totalAmount,
                 duration: serviceData.duration.value,
-                category: serviceData.category
+                category: serviceData.category,
+                taxAmount: taxAmount,
+                serviceFee: serviceFee,
+                basePrice: basePrice,
+                discountAmount: discountAmount
             },
             scheduledDate: isImmediate ? new Date() : scheduledDate,
             scheduledTime: isImmediate ? 'Immediate' : scheduledTime,
@@ -61,9 +76,23 @@ class BookingService {
             totalAmount,
             notes,
             phone,
+            payment: {
+                method: paymentMethod || 'cod',
+                status: 'pending'
+            },
             status: 'searching',
             timestamps: { searchingAt: new Date() }
         });
+
+        // Automated Post-Purchase "Offer" Notification to User
+        NotificationService.send({
+            recipient: userId,
+            recipientType: 'User',
+            type: 'alert',
+            title: '🎉 Service Booked! ',
+            message: `Your booking is confirmed! Look out for exclusive discounts on your next AC service.`,
+            data: { bookingId: booking._id, type: 'post_purchase_offer' }
+        }, app).catch(e => logger.error(`User Notify Error: ${e.message}`));
 
         return booking;
     }
@@ -77,7 +106,7 @@ class BookingService {
             const userLocation = booking.address.location.coordinates;
             const searchRadius = booking.providerSearchRadius || 5;
 
-            const providers = await ServiceProvider.find({
+            let providers = await ServiceProvider.find({
                 verificationStatus: "approved",
                 isActive: true,
                 "availability.isAvailable": true,
@@ -88,7 +117,11 @@ class BookingService {
                         $maxDistance: searchRadius * 1000
                     }
                 }
-            }).limit(15);
+            }).limit(30);
+
+            // ⚡ ENTERPRISE: Rating-based Ranking
+            // Sort by average rating (desc) as secondary priority to distance
+            providers = providers.sort((a, b) => (b.ratings?.average || 0) - (a.ratings?.average || 0)).slice(0, 15);
 
             if (providers.length === 0) return this.handleNoProvidersFound(booking, app);
 

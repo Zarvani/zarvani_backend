@@ -72,7 +72,9 @@ const serviceSchema = new mongoose.Schema({
     basePrice: { type: Number, required: true },
     currency: { type: String, default: 'INR' },
     discountedPrice: Number,
-    discountPercentage: Number
+    discountPercentage: Number,
+    taxRate: { type: Number, default: 0 }, // percentage (e.g. 18 for GST)
+    serviceFee: { type: Number, default: 0 } // flat fee for the service itself (like delivery)
   },
   duration: {
     value: Number,

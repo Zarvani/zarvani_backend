@@ -116,6 +116,10 @@ app.use(morgan('combined', { stream: { write: message => logger.info(message.tri
 // Prevents database connection pool exhaustion
 app.use(requestQueue.middleware());
 
+// ✅ IDEMPOTENCY: Prevent duplicate requests
+const idempotency = require('./middleware/idempotency');
+app.use(idempotency);
+
 // ==================== HEALTH CHECK ====================
 app.get('/health', async (req, res) => {
   const health = {
