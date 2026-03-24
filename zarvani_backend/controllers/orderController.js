@@ -8,6 +8,7 @@ const logger = require('../utils/logger');
 const mongoose = require('mongoose');
 const CacheService = require('../services/cacheService');
 const CacheInvalidationService = require('../services/cacheInvalidationService');
+const AuditLogger = require('../utils/auditLogger');
 const { batchLoadAndAttach, batchLoadNested } = require('../utils/batchLoader');
 
 // Helper: Generate unique order ID
@@ -55,6 +56,14 @@ exports.createOrder = async (req, res) => {
       }
     }, req.app);
 
+    // ⚡ ENTERPRISE: Audit Log
+    await AuditLogger.log(req, {
+      action: 'ORDER_CREATED',
+      resource: { id: order._id, model: 'Order', identifier: order.orderId },
+      changes: { after: { status: 'pending', amount: order.pricing.totalAmount } },
+      severity: 'low'
+    });
+
     ResponseHandler.success(res, { order }, 'Order placed successfully', 201);
   } catch (error) {
     logger.error(`Create order error: ${error.message}`);
@@ -67,6 +76,15 @@ exports.createOrder = async (req, res) => {
 exports.acceptOrder = async (req, res) => {
   try {
     const order = await OrderService.acceptOrder(req.params.orderId, req.user._id, req.app);
+    
+    // ⚡ ENTERPRISE: Audit Log
+    await AuditLogger.log(req, {
+      action: 'ORDER_ACCEPTED',
+      resource: { id: order._id, model: 'Order', identifier: order.orderId },
+      changes: { before: { status: 'pending' }, after: { status: 'confirmed', shop: req.user._id } },
+      severity: 'medium'
+    });
+
     ResponseHandler.success(res, { order }, 'Order accepted successfully');
   } catch (error) {
     logger.error(`Accept order error: ${error.message}`);
@@ -347,17 +365,24 @@ exports.markDelivered = async (req, res) => {
 exports.markOrderPaid = async (req, res) => {
   try {
     const { orderId } = req.params;
-    const { paymentMethod = 'cash', transactionId } = req.body;
+    const { paymentMethod = 'cod', transactionId, confirmationPIN } = req.body;
     const shopId = req.user._id;
 
     const order = await Order.findOne({
       _id: orderId,
       shop: shopId,
       status: { $in: ['delivered', 'arriving'] }
-    });
+    }).select('+payment.confirmationPIN');
 
     if (!order) {
       return ResponseHandler.error(res, 'Order not found or not authorized', 404);
+    }
+
+    // ⚡ ENTERPRISE: PIN Verification for COD
+    if (order.payment.method === 'cod' && order.payment.confirmationPIN) {
+        if (confirmationPIN !== order.payment.confirmationPIN) {
+            return ResponseHandler.error(res, 'Invalid confirmation PIN. Customer must provide the 6-digit PIN to complete payment.', 403);
+        }
     }
     if (order.payment?.status === 'paid') {
       order.status = 'delivered'; // or whatever marks completion
@@ -371,7 +396,7 @@ exports.markOrderPaid = async (req, res) => {
       }, 'Service completed successfully');
     }
 
-    const personalPaymentMethods = ['cash', 'personal_upi', 'cod'];
+    const personalPaymentMethods = ['cod'];
     const isPersonalPayment = personalPaymentMethods.includes(paymentMethod);
 
     // Update order payment info

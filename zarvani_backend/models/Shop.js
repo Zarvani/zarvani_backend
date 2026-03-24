@@ -82,8 +82,16 @@ const deliveryBoySchema = new mongoose.Schema({
     default: true
   },
   lastLogin: Date,
+  loginAttempts: { type: Number, default: 0 },
+  lockUntil: Date,
+  sessions: [{
+    refreshToken: String,
+    device: String,
+    ip: String,
+    createdAt: { type: Date, default: Date.now }
+  }],
   otp: {
-    code: String,
+    code: String, // Store SHA-256 hash
     expiresAt: Date,
     attempts: { type: Number, default: 0 }
   },
@@ -121,6 +129,32 @@ deliveryBoySchema.pre('save', async function (next) {
 
 deliveryBoySchema.methods.comparePassword = async function (pwd) {
   return await bcrypt.compare(pwd, this.password);
+};
+
+deliveryBoySchema.methods.isLocked = function() {
+  return !!(this.lockUntil && this.lockUntil > Date.now());
+};
+
+deliveryBoySchema.methods.generateOTP = function () {
+  const crypto = require('crypto');
+  const otp = crypto.randomInt(100000, 999999).toString();
+  const hashedOtp = crypto.createHash('sha256').update(otp).digest('hex');
+
+  this.otp = {
+    code: hashedOtp,
+    expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+    attempts: 0
+  };
+  return otp;
+};
+
+deliveryBoySchema.methods.verifyOTP = function (enteredOTP) {
+  if (!this.otp || !this.otp.code || this.otp.expiresAt < new Date() || this.otp.attempts >= 5) {
+    return false;
+  }
+  const crypto = require('crypto');
+  const hashedEnteredOTP = crypto.createHash('sha256').update(enteredOTP).digest('hex');
+  return this.otp.code === hashedEnteredOTP;
 };
 
 const shopSchema = new mongoose.Schema({
@@ -336,8 +370,17 @@ const shopSchema = new mongoose.Schema({
 
   lastLogin: Date,
 
+  loginAttempts: { type: Number, default: 0 },
+  lockUntil: Date,
+  sessions: [{
+    refreshToken: String,
+    device: String,
+    ip: String,
+    createdAt: { type: Date, default: Date.now }
+  }],
+
   otp: {
-    code: String,
+    code: String, // Store SHA-256 hash
     expiresAt: Date,
     attempts: { type: Number, default: 0 }
   },
@@ -404,11 +447,17 @@ shopSchema.methods.comparePassword = async function (pwd) {
   return await bcrypt.compare(pwd, this.password);
 };
 
+shopSchema.methods.isLocked = function() {
+  return !!(this.lockUntil && this.lockUntil > Date.now());
+};
+
 shopSchema.methods.generateOTP = function () {
   const crypto = require('crypto');
   const otp = crypto.randomInt(100000, 999999).toString();
+  const hashedOtp = crypto.createHash('sha256').update(otp).digest('hex');
+
   this.otp = {
-    code: otp,
+    code: hashedOtp,
     expiresAt: new Date(Date.now() + 10 * 60 * 1000),
     attempts: 0
   };
@@ -419,7 +468,10 @@ shopSchema.methods.verifyOTP = function (enteredOTP) {
   if (!this.otp || !this.otp.code) return false;
   if (this.otp.expiresAt < new Date()) return false;
   if (this.otp.attempts >= 5) return false;
-  return this.otp.code === enteredOTP;
+  
+  const crypto = require('crypto');
+  const hashedEnteredOTP = crypto.createHash('sha256').update(enteredOTP).digest('hex');
+  return this.otp.code === hashedEnteredOTP;
 };
 
 // Helper method to check if shop is open now

@@ -160,6 +160,19 @@ exports.upiPaymentWebhook = async (req, res) => {
       }
     }
 
+    // ✅ NEW: Duplicate Webhook Protection (Enterprise Idempotency)
+    const webhookId = req.headers['x-razorpay-event-id'];
+    const redisClient = require('../config/passport'); // Using existing redis connection
+    if (webhookId) {
+      const isProcessed = await redisClient.get(`webhook:${webhookId}`);
+      if (isProcessed) {
+        logger.info(`Duplicate webhook safely ignored: ${webhookId}`);
+        return ResponseHandler.success(res, {}, 'Webhook already processed');
+      }
+      // Lock it for 24 hours to prevent duplicate processing
+      await redisClient.setEx(`webhook:${webhookId}`, 86400, "1");
+    }
+
     const webhookData = req.body;
 
     // Process the webhook

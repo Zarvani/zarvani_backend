@@ -42,6 +42,11 @@ const createRateLimiter = (options) => {
             legacyHeaders: false,
             skipSuccessfulRequests,
 
+            // Hybrid Key Generator: UserID + IP (prevents authorized users from spamming across IPs)
+            keyGenerator: (req) => {
+                return req.user ? `${req.user._id}:${req.ip}` : req.ip;
+            },
+
             // Redis store with error handling
             store: new RedisStore({
                 client: redisClient,
@@ -187,11 +192,32 @@ const createEndpointLimiter = (endpoint, max, windowMs) => {
     });
 };
 
+/**
+ * 7. Strict Throttler (Brute-force protection)
+ * Very strict limits for sensitive endpoints
+ */
+const strictThrottler = createRateLimiter({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 20, // 20 requests per 15 mins
+    message: 'Too many requests. Please try again after 15 minutes.'
+});
+/**
+ * 8. Burst Protection Limiter
+ * Short window to prevent sudden spikes
+ */
+const burstLimiter = createRateLimiter({
+    windowMs: 10 * 1000, // 10 seconds
+    max: 10, // 10 requests per 10 seconds
+    message: 'Too many requests in a short time. Please slow down.'
+});
+
 module.exports = {
     globalLimiter,
     authLimiter,
     apiLimiter,
     uploadLimiter,
     createUserLimiter,
-    createEndpointLimiter
+    createEndpointLimiter,
+    strictThrottler,
+    burstLimiter
 };
