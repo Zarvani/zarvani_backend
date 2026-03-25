@@ -1,5 +1,5 @@
 // ============= utils/distributedLock.js =============
-const redisClient = require('../config/passport');
+const redisClient = require('../config/redis');
 const logger = require('./logger');
 
 class DistributedLock {

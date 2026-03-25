@@ -16,6 +16,11 @@ const otpQueue = new Queue('otp-queue', 'redis://localhost:6379', {
     }
 });
 
+// ✅ Handle Redis errors to prevent crashes
+otpQueue.on('error', (error) => {
+    logger.error(`Bull Queue (otp-queue) Redis Error: ${error.message}`);
+});
+
 // Process OTP jobs
 otpQueue.process('send-otp', async (job) => {
     const { identifier, otp, name, type } = job.data;

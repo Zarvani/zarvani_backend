@@ -4,7 +4,7 @@ const User = require('../models/User');
 const ServiceProvider = require('../models/ServiceProvider');
 const Shop = require('../models/Shop');
 const { Admin } = require('../models/Admin');
-const redisClient = require('../config/passport');
+const redisClient = require('../config/redis');
 
 exports.protect = async (req, res, next) => {
   try {

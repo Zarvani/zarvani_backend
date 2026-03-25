@@ -1,7 +1,7 @@
 // ============= middleware/rateLimiter.js =============
 const rateLimit = require('express-rate-limit');
-const RedisStore = require('rate-limit-redis');
-const redisClient = require('../config/passport');
+const { RedisStore } = require('rate-limit-redis');
+const redisClient = require('../config/redis');
 const logger = require('../utils/logger');
 
 /**
@@ -49,17 +49,8 @@ const createRateLimiter = (options) => {
 
             // Redis store with error handling
             store: new RedisStore({
-                client: redisClient,
+                sendCommand: (...args) => redisClient.sendCommand(args),
                 prefix: 'rl:',
-                sendCommand: async (...args) => {
-                    try {
-                        return await redisClient.call(...args);
-                    } catch (error) {
-                        logger.error(`Redis rate limit error: ${error.message}`);
-                        // Return null to use in-memory fallback
-                        return null;
-                    }
-                }
             }),
 
             // Custom handler for better error messages
@@ -157,16 +148,8 @@ const createUserLimiter = (max = 500) => {
         },
 
         store: new RedisStore({
-            client: redisClient,
+            sendCommand: (...args) => redisClient.sendCommand(args),
             prefix: 'rl:user:',
-            sendCommand: async (...args) => {
-                try {
-                    return await redisClient.call(...args);
-                } catch (error) {
-                    logger.error(`Redis user rate limit error: ${error.message}`);
-                    return null;
-                }
-            }
         }),
 
         handler: (req, res) => {

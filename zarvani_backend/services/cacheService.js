@@ -70,7 +70,7 @@ class CacheService {
 
         return await circuitBreaker.execute('redis', async () => {
             const serialized = JSON.stringify(value);
-            await this.redis.setex(key, ttl, serialized);
+            await this.redis.set(key, serialized, { EX: ttl });
             logger.debug(`Cache SET: ${key} (TTL: ${ttl}s)`);
             return true;
         }, async () => {

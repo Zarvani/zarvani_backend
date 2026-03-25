@@ -9,6 +9,11 @@ const stockTtlQueue = new Bull('stock-ttl', {
     redis: { port: 6379, host: '127.0.0.1' }
 });
 
+// ✅ Handle Redis errors to prevent crashes
+stockTtlQueue.on('error', (error) => {
+    logger.error(`Bull Queue (stock-ttl) Redis Error: ${error.message}`);
+});
+
 // Process stock release
 stockTtlQueue.process(async (job) => {
     const { orderId } = job.data;
