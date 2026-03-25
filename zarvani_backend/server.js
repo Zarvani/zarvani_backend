@@ -41,7 +41,9 @@ const app = express();
 const server = http.createServer(app);
 
 // Socket.IO setup
-const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : ['*'];
+const allowedOrigins = process.env.ALLOWED_ORIGINS 
+  ? process.env.ALLOWED_ORIGINS.split(',').map(item => item.trim()) 
+  : ['*'];
 
 const { createAdapter } = require("@socket.io/redis-adapter");
 const { Cluster } = require("ioredis");
