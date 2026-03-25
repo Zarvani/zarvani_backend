@@ -78,6 +78,16 @@ const errorHandler = (err, req, res, next) => {
     };
   }
 
+  // CORS errors
+  if (err.message === 'Not allowed by CORS') {
+    error = {
+      message: `CORS Error: The origin ${req.headers.origin} is not allowed by the server configuration. Please check ALLOWED_ORIGINS in your environment variables.`,
+      statusCode: 403,
+      type: 'CORS_ERROR',
+      recoverable: true
+    };
+  }
+
   // Circuit breaker errors
   if (err.message && err.message.includes('temporarily unavailable')) {
     error = {
