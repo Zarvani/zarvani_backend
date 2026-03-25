@@ -1,5 +1,5 @@
 // ============= services/socketService.js =============
-const redisClient = require('../config/passport');
+const redisClient = require('../config/redis');
 const logger = require('../utils/logger');
 let io;
 

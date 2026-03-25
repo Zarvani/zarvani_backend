@@ -338,7 +338,6 @@ const paymentSchema = new mongoose.Schema({
 // ==================== INDEXES ====================
 paymentSchema.index({ user: 1, createdAt: -1 });
 paymentSchema.index({ provider: 1, status: 1 });
-paymentSchema.index({ transactionId: 1 }, { unique: true, sparse: true });
 paymentSchema.index({ gatewayTransactionId: 1 }, { unique: true, sparse: true });
 paymentSchema.index({ 'upiPayment.transactionId': 1 }, { unique: true, sparse: true });
 paymentSchema.index({ shop: 1, status: 1 });

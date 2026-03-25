@@ -1,5 +1,5 @@
 // ============= middleware/idempotency.js =============
-const redisClient = require('../config/passport');
+const redisClient = require('../config/redis');
 const logger = require('../utils/logger');
 const ResponseHandler = require('../utils/responseHandler');
 

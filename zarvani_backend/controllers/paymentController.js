@@ -162,7 +162,7 @@ exports.upiPaymentWebhook = async (req, res) => {
 
     // ✅ NEW: Duplicate Webhook Protection (Enterprise Idempotency)
     const webhookId = req.headers['x-razorpay-event-id'];
-    const redisClient = require('../config/passport'); // Using existing redis connection
+    const redisClient = require('../config/redis'); // Using existing redis connection
     if (webhookId) {
       const isProcessed = await redisClient.get(`webhook:${webhookId}`);
       if (isProcessed) {

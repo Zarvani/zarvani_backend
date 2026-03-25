@@ -2,6 +2,7 @@
 const ServiceProvider = require('../models/ServiceProvider');
 const { Service } =require("../models/Service")
 const ResponseHandler = require('../utils/responseHandler');
+const GeoService = require('../services/geoService');
 // Get Provider Profile
 exports.getProfile = async (req, res) => {
   try {

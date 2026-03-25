@@ -12,7 +12,7 @@ const errorHandler = require('./middleware/errorHandler');
 const logger = require('./utils/logger');
 const swaggerUi = require('swagger-ui-express');
 const swaggerSpec = require('./config/swagger');
-const redisClient = require('./config/passport');
+const redisClient = require('./config/redis');
 
 // Import crash prevention middleware
 const {

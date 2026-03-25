@@ -170,7 +170,7 @@ const gracefulShutdown = (server, signal) => {
 
     try {
       // Close Redis connection
-      const redisClient = require('../config/passport');
+      const redisClient = require('../config/redis');
       await redisClient.quit();
       logger.info('Redis connection closed');
     } catch (error) {

@@ -1,7 +1,7 @@
 // ============= services/geoService.js =============
 const axios = require("axios");
 const logger = require("../utils/logger");
-const redisClient = require("../config/passport");
+const redisClient = require('../config/redis');
 const { circuitBreaker } = require('../middleware/circuitBreaker');
 
 class GeoService {

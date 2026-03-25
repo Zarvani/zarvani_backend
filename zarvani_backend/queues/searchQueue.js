@@ -18,6 +18,11 @@ const searchQueue = new Bull('provider-search', {
         removeOnFail: 10
     }
 });
+ 
+// ✅ Handle Redis errors to prevent crashes
+searchQueue.on('error', (error) => {
+    logger.error(`Bull Queue (provider-search) Redis Error: ${error.message}`);
+});
 
 // Process Search Job
 searchQueue.process(async (job) => {

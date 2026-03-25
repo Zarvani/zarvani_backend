@@ -9,7 +9,7 @@ const SMSService = require('../services/smsService');
 const ResponseHandler = require('../utils/responseHandler');
 const getAddressFromCoords = require('../utils/getAddressFromCoords')
 const logger = require('../utils/logger');
-const redisClient = require("../config/passport");
+const redisClient = require('../config/redis');
 const otpQueue = require('../queues/otpQueue');
 // Generate JWT Token
 const generateToken = (id, role) => {
