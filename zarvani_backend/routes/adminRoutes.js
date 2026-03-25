@@ -4,9 +4,10 @@ const router = express.Router();
 const adminController = require('../controllers/adminController');
 const { protect, authorize } = require('../middleware/authMiddleware');
 const { uploadImages } = require('../middleware/uploadMiddleware')
-router.post('/createAdmin', adminController.createAdmin);
 router.use(protect);
 router.use(authorize('admin', 'superadmin'));
+
+router.post('/createAdmin', adminController.createAdmin);
 
 // User Management
 router.get('/users', adminController.getAllUsers);

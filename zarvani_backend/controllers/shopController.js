@@ -8,6 +8,7 @@ const GeoService = require('../services/geoService');
 const CacheService = require('../services/cacheService');
 const CacheInvalidationService = require('../services/cacheInvalidationService');
 const logger = require('../utils/logger');
+const PushNotificationService = require('../services/pushNotification');
 
 // Get Shop Profile
 exports.getProfile = async (req, res) => {

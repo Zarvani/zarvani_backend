@@ -79,7 +79,10 @@ const createRateLimiter = (options) => {
                 }
 
                 return false;
-            }
+            },
+
+            // ✅ Disable validations to allow multiple rate limiters (Defense in Depth)
+            validate: false
         });
     } catch (error) {
         logger.error(`Failed to create Redis rate limiter: ${error.message}`);
@@ -153,13 +156,15 @@ const createUserLimiter = (max = 500) => {
         }),
 
         handler: (req, res) => {
-            logger.warn(`User rate limit exceeded - User: ${req.user?._id}, IP: ${req.ip}`);
             res.status(429).json({
                 success: false,
                 message: 'You have exceeded your request limit. Please try again later.',
                 retryAfter: 900 // 15 minutes
             });
-        }
+        },
+
+        // ✅ Disable validations to allow multiple rate limiters
+        validate: false
     });
 };
 
