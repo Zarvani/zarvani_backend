@@ -12,10 +12,28 @@ const { Admin } = require('../models/Admin');
 const jwt = require('jsonwebtoken');
 const logger = require('../utils/logger');
 const mongoose = require("mongoose");
+const PushNotificationService = require('../services/pushNotification');
 
 exports.createAdmin = async (req, res) => {
   try {
     const { name, email, password, role, permissions } = req.body;
+
+    // ✅ BOOTSTRAPPING: Allow the very first admin to be created if none exist
+    const adminCount = await Admin.countDocuments();
+    
+    if (adminCount > 0) {
+      // If admins exist, the requester MUST be an authenticated Admin/SuperAdmin
+      // (This is already handled by middleware in routes, but adding extra safety check here)
+      if (!req.user || (req.user.role !== 'superadmin' && req.user.role !== 'admin')) {
+        return res.status(403).json({ error: 'Permission denied. Only Admins can create other Admins.' });
+      }
+
+      // ONLY SuperAdmin can create other SuperAdmins
+      if (role === 'superadmin' && req.user.role !== 'superadmin') {
+        return res.status(403).json({ error: 'Only a SuperAdmin can create another SuperAdmin.' });
+      }
+    }
+
     const admin = new Admin({ name, email, password, role, permissions });
     await admin.save();
     res.status(201).json({ message: 'Admin created successfully', admin });

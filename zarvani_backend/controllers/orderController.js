@@ -10,6 +10,7 @@ const CacheService = require('../services/cacheService');
 const CacheInvalidationService = require('../services/cacheInvalidationService');
 const AuditLogger = require('../utils/auditLogger');
 const { batchLoadAndAttach, batchLoadNested } = require('../utils/batchLoader');
+const PushNotificationService = require('../services/pushNotification');
 
 // Helper: Generate unique order ID
 const generateOrderId = () => {
