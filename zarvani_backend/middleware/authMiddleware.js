@@ -21,6 +21,15 @@ exports.protect = async (req, res, next) => {
       });
     }
 
+    // ✅ SECURITY: Check if token is blacklisted (JWT Revocation)
+    const isBlacklisted = await redisClient.get(`bl_${token}`);
+    if (isBlacklisted) {
+      return res.status(401).json({
+        success: false,
+        message: 'Token has been revoked. Please log in again.'
+      });
+    }
+
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
     // ✅ PERFORMANCE: Check Redis cache first to avoid DB hits on every request

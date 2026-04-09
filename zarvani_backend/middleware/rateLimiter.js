@@ -31,7 +31,7 @@ const createFallbackLimiter = (windowMs, max, message) => {
  * Create Redis-based rate limiter with fallback
  */
 const createRateLimiter = (options) => {
-    const { windowMs, max, message, skipSuccessfulRequests = false } = options;
+    const { windowMs, max, message, skipSuccessfulRequests = false, prefix = 'rl:' } = options;
 
     try {
         return rateLimit({
@@ -50,7 +50,7 @@ const createRateLimiter = (options) => {
             // Redis store with error handling
             store: new RedisStore({
                 sendCommand: (...args) => redisClient.sendCommand(args),
-                prefix: 'rl:',
+                prefix: prefix,
             }),
 
             // Custom handler for better error messages
@@ -99,7 +99,8 @@ const createRateLimiter = (options) => {
 const globalLimiter = createRateLimiter({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 100, // 100 requests per 15 minutes per IP
-    message: 'Too many requests from this IP, please try again after 15 minutes'
+    message: 'Too many requests from this IP, please try again after 15 minutes',
+    prefix: 'rl:global:'
 });
 
 /**
@@ -108,9 +109,10 @@ const globalLimiter = createRateLimiter({
  */
 const authLimiter = createRateLimiter({
     windowMs: 60 * 1000, // 1 minute
-    max: 5, // 5 requests per minute
+    max: 15, // 15 requests per minute
     message: 'Too many login attempts, please try again after 1 minute',
-    skipSuccessfulRequests: true // Only count failed attempts
+    skipSuccessfulRequests: true, // Only count failed attempts
+    prefix: 'rl:auth:'
 });
 
 /**
@@ -120,7 +122,8 @@ const authLimiter = createRateLimiter({
 const apiLimiter = createRateLimiter({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 200, // 200 requests per 15 minutes
-    message: 'API rate limit exceeded, please try again later'
+    message: 'API rate limit exceeded, please try again later',
+    prefix: 'rl:api:'
 });
 
 /**
@@ -130,7 +133,8 @@ const apiLimiter = createRateLimiter({
 const uploadLimiter = createRateLimiter({
     windowMs: 60 * 60 * 1000, // 1 hour
     max: 10, // 10 uploads per hour
-    message: 'Upload limit exceeded, please try again after 1 hour'
+    message: 'Upload limit exceeded, please try again after 1 hour',
+    prefix: 'rl:upload:'
 });
 
 /**
@@ -176,7 +180,8 @@ const createEndpointLimiter = (endpoint, max, windowMs) => {
     return createRateLimiter({
         windowMs,
         max,
-        message: `Rate limit exceeded for ${endpoint}`
+        message: `Rate limit exceeded for ${endpoint}`,
+        prefix: `rl:endpoint:${endpoint}:`
     });
 };
 
@@ -187,7 +192,8 @@ const createEndpointLimiter = (endpoint, max, windowMs) => {
 const strictThrottler = createRateLimiter({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 20, // 20 requests per 15 mins
-    message: 'Too many requests. Please try again after 15 minutes.'
+    message: 'Too many requests. Please try again after 15 minutes.',
+    prefix: 'rl:strict:'
 });
 /**
  * 8. Burst Protection Limiter
@@ -196,7 +202,8 @@ const strictThrottler = createRateLimiter({
 const burstLimiter = createRateLimiter({
     windowMs: 10 * 1000, // 10 seconds
     max: 10, // 10 requests per 10 seconds
-    message: 'Too many requests in a short time. Please slow down.'
+    message: 'Too many requests in a short time. Please slow down.',
+    prefix: 'rl:burst:'
 });
 
 module.exports = {

@@ -38,11 +38,15 @@ const cartRoutes = require('./routes/cartRoutes');
 const commission = require('./routes/commissionRoutes');
 
 const app = express();
+
+// Trust proxy to ensure req.ip contains the real user's IP instead of the load balancer's IP
+app.set('trust proxy', 1);
+
 const server = http.createServer(app);
 
 // Socket.IO setup
-const allowedOrigins = process.env.ALLOWED_ORIGINS 
-  ? process.env.ALLOWED_ORIGINS.split(',').map(item => item.trim()) 
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map(item => item.trim())
   : ['*'];
 
 const { createAdapter } = require("@socket.io/redis-adapter");
@@ -95,6 +99,25 @@ connectDB();
 app.use(helmet());
 app.use(compression());
 
+// ✅ FAULT TOLERANCE: Strict API Timeouts
+app.use((req, res, next) => {
+  // Set 10-second timeout for all requests
+  req.setTimeout(10000, () => {
+    logger.warn(`Request timeout limit reached for ${req.method} ${req.url}`);
+    const err = new Error('Request Timeout - Server is under heavy load');
+    err.status = 503;
+    next(err);
+  });
+
+  res.setTimeout(10000, () => {
+    logger.warn(`Response timeout limit reached for ${req.method} ${req.url}`);
+    const err = new Error('Service Unavailable - Response Timeout');
+    err.status = 503;
+    next(err);
+  });
+  next();
+});
+
 // 2. CORS
 app.use(cors({
   origin: (origin, callback) => {
@@ -112,7 +135,12 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // 4. Logging
-app.use(morgan('combined', { stream: { write: message => logger.info(message.trim()) } }));
+// ✅ PERFORMANCE: Skip logging successful high-volume requests in production to save I/O
+app.use(morgan('combined', {
+  skip: (req, res) => res.statusCode < 400,
+  stream: { write: message => logger.info(message.trim()) }
+}));
+
 
 // 5. Request Queue (BEFORE rate limiting)
 // Prevents database connection pool exhaustion
