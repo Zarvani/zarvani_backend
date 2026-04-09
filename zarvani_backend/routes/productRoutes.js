@@ -4,6 +4,7 @@ const router = express.Router();
 
 const productController = require("../controllers/productController");
 const { protect, authorize } = require("../middleware/authMiddleware");
+const cacheMiddleware = require("../middleware/cache");
 
 // ✅ Import correct upload method from uploadMiddleware.js
 const {
@@ -16,20 +17,20 @@ const {
 
 // ==================== PUBLIC ROUTES ====================
 
-// Get all products with filters
-router.get("/", productController.getAllProducts);
+// Get all products with filters (Cache for 5 mins)
+router.get("/", cacheMiddleware(300), productController.getAllProducts);
 
-// Get product details
-router.get("/:id", productController.getProductDetails);
+// Get product details (Cache for 5 mins)
+router.get("/:id", cacheMiddleware(300), productController.getProductDetails);
 
-// Get products by shop
-router.get("/shop/:shopId", productController.getShopProducts);
+// Get products by shop (Cache for 5 mins)
+router.get("/shop/:shopId", cacheMiddleware(300), productController.getShopProducts);
 
-// Get all categories
-router.get("/utils/categories", productController.getCategories);
+// Get all categories (Cache for 24 hours, rarely changes)
+router.get("/utils/categories", cacheMiddleware(86400), productController.getCategories);
 
-// Get subcategories by category
-router.get("/utils/categories/:category/subcategories", productController.getSubcategories);
+// Get subcategories by category (Cache for 24 hours)
+router.get("/utils/categories/:category/subcategories", cacheMiddleware(86400), productController.getSubcategories);
 
 // ==================== PROTECTED ROUTES (REQUIRE AUTH) ====================
 router.use(protect);

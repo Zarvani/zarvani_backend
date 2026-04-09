@@ -4,11 +4,11 @@ const router = express.Router();
 const userController = require('../controllers/userController');
 const { protect, authorize } = require('../middleware/authMiddleware');
 const { uploadProfile } = require('../middleware/uploadMiddleware');
+const cacheMiddleware = require('../middleware/cache');
 
-
-router.get("/category", userController.getServicesByCategory);
-router.get("/services", userController.getServices);
-router.get("/servicesbyid/:id", userController.getServiceById);
+router.get("/category", cacheMiddleware(86400), userController.getServicesByCategory);
+router.get("/services", cacheMiddleware(300), userController.getServices);
+router.get("/servicesbyid/:id", cacheMiddleware(300), userController.getServiceById);
 router.post('/reviews', userController.submitReview);
 
 router.use(protect);

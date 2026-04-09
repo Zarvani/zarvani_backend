@@ -1084,3 +1084,35 @@ exports.updateLocation = async (req, res) => {
   }
 };
 
+// Logout User / Provider / Shop
+// Revokes the token by adding it to a Redis blacklist
+exports.logout = async (req, res) => {
+  try {
+    let token;
+    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+      token = req.headers.authorization.split(' ')[1];
+    }
+    
+    if (token) {
+      // Decode without verifying just to get exp
+      const decoded = jwt.decode(token);
+      if (decoded && decoded.exp) {
+        // Calculate remaining seconds
+        const currentSeconds = Math.floor(Date.now() / 1000);
+        const timeRemaining = decoded.exp - currentSeconds;
+        
+        if (timeRemaining > 0) {
+          // Add to Redis blacklist
+          await redisClient.setEx(`bl_${token}`, timeRemaining, "revoked");
+          logger.info(`Token for user ${decoded.id} blacklisted upon logout.`);
+        }
+      }
+    }
+
+    return ResponseHandler.success(res, null, "Logged out successfully", 200);
+  } catch (error) {
+    logger.error(`Logout Error: ${error.message}`);
+    return ResponseHandler.error(res, "Logout failed", 500);
+  }
+};
+
