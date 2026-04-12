@@ -143,6 +143,31 @@ exports.updateProviderLocation = async (req, res) => {
       );
     }
 
+    // ✅ REAL-TIME: Push provider location to user's booking tracking page via Socket.IO
+    const io = req.app.get('io');
+    if (io) {
+      // Broadcast to booking room — user's tracking page receives this
+      io.to(`booking_${bookingId}`).emit('location-updated', {
+        latitude,
+        longitude,
+        distance,
+        duration: Math.round(durationMinutes),
+        estimatedArrival: booking.tracking.estimatedArrival,
+        providerName: req.user.name,
+        timestamp: new Date()
+      });
+
+      // Also notify user directly via their personal room
+      if (distance < 0.5) {
+        io.to(`user_${booking.user}`).emit('provider-arriving', {
+          bookingId,
+          distance,
+          message: `${req.user.name} is arriving in ${Math.round(durationMinutes)} minutes!`,
+          timestamp: new Date()
+        });
+      }
+    }
+
     ResponseHandler.success(res, {
       distance,
       duration: durationMinutes,
@@ -334,16 +359,15 @@ exports.getPendingRequests = async (req, res) => {
       return ResponseHandler.error(res, "Provider not found", 404);
     }
 
+    let providerLocation = [0, 0];
     if (
-      !provider.address ||
-      !provider.address.location ||
-      !provider.address.location.coordinates ||
-      provider.address.location.coordinates.length !== 2
+      provider.address &&
+      provider.address.location &&
+      provider.address.location.coordinates &&
+      provider.address.location.coordinates.length === 2
     ) {
-      return ResponseHandler.error(res, "Provider location missing", 400);
+      providerLocation = provider.address.location.coordinates;
     }
-
-    const providerLocation = provider.address.location.coordinates;
 
     // Use .lean() for faster queries
     const bookings = await Booking.find({

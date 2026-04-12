@@ -6,6 +6,7 @@ const CacheService = require('../services/cacheService');
 const CacheInvalidationService = require('../services/cacheInvalidationService');
 const { batchLoadAndAttach } = require('../utils/batchLoader');
 const logger = require('../utils/logger');
+const GeoService = require('../services/geoService');
 
 // ==================== PUBLIC ROUTES ====================
 
@@ -657,3 +658,128 @@ exports.getSubcategories = async (req, res) => {
 
 // Cache invalidation now handled by CacheInvalidationService
 
+// ========================== NEARBY PRODUCTS (Blinkit/Swiggy Style) ==========================
+// GET /api/v1/products/public/nearby?lat=X&lng=Y&radius=5&category=grocery
+exports.getNearbyProducts = async (req, res) => {
+  try {
+    const { lat, lng, radius = 5, category, subcategory, search, limit = 40, page = 1 } = req.query;
+
+    if (!lat || !lng) {
+      return ResponseHandler.error(res, 'lat and lng query params are required', 400);
+    }
+
+    const latitude = parseFloat(lat);
+    const longitude = parseFloat(lng);
+    const radiusMeters = parseFloat(radius) * 1000;
+
+    // Build cache key
+    const cacheKey = `products:nearby:${latitude.toFixed(3)},${longitude.toFixed(3)}:r${radius}:${category || 'all'}:${subcategory || ''}:${search || ''}:p${page}`;
+    if (page == 1) {
+      const cached = await CacheService.get(cacheKey);
+      if (cached) {
+        return ResponseHandler.success(res, cached, 'Nearby products fetched from cache');
+      }
+    }
+
+    // Step 1: Find nearby active shops within radius
+    const shopMatchStage = { isActive: true, verificationStatus: 'approved' };
+    const nearbyShops = await Shop.aggregate([
+      {
+        $geoNear: {
+          near: { type: 'Point', coordinates: [longitude, latitude] },
+          distanceField: 'distance',
+          maxDistance: radiusMeters,
+          spherical: true,
+          query: shopMatchStage
+        }
+      },
+      { $addFields: { distanceKm: { $divide: ['$distance', 1000] } } },
+      { $sort: { distance: 1 } },
+      { $limit: 50 },
+      { $project: { _id: 1, name: 1, logo: 1, distance: 1, distanceKm: 1, ratings: 1, deliverySettings: 1, phone: 1 } }
+    ]);
+
+    if (!nearbyShops.length) {
+      return ResponseHandler.success(res, { products: [], pagination: { total: 0 } }, 'No shops found nearby');
+    }
+
+    const shopIds = nearbyShops.map(s => s._id);
+    const shopMap = {};
+    nearbyShops.forEach(s => { shopMap[s._id.toString()] = s; });
+
+    // Step 2: Find products from those shops
+    const productQuery = {
+      shop: { $in: shopIds },
+      isAvailable: true
+    };
+    if (category) productQuery.category = category;
+    if (subcategory) productQuery.subcategory = subcategory;
+    if (search) productQuery.$text = { $search: search };
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const products = await Product.find(productQuery)
+      .lean()
+      .sort({ isFeatured: -1, 'ratings.average': -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    const total = await Product.countDocuments(productQuery);
+
+    // Step 3: Attach shop info (distance, delivery fee, ETA) to each product
+    const enrichedProducts = products.map(product => {
+      const shop = shopMap[product.shop?.toString()];
+      if (!shop) return product;
+
+      const distanceKm = shop.distanceKm || 0;
+      const baseFee = shop.deliverySettings?.deliveryFee?.baseFee || 20;
+      const perKm = shop.deliverySettings?.deliveryFee?.perKm || 5;
+      const freeAbove = shop.deliverySettings?.deliveryFee?.freeDeliveryAbove || 299;
+      const sellingPrice = product.price?.sellingPrice || 0;
+
+      const deliveryFee = sellingPrice >= freeAbove ? 0 : Math.round(baseFee + Math.max(0, distanceKm - 1) * perKm);
+      const estimatedDeliveryMin = Math.ceil((shop.deliverySettings?.estimatedDeliveryTime?.min || 10) + distanceKm * 3);
+
+      return {
+        ...product,
+        shopInfo: {
+          _id: shop._id,
+          name: shop.name,
+          logo: shop.logo,
+          rating: shop.ratings?.average || 0,
+          phone: shop.phone
+        },
+        distanceKm: parseFloat(distanceKm.toFixed(2)),
+        deliveryFee,
+        estimatedDeliveryMin,
+        freeDelivery: deliveryFee === 0
+      };
+    });
+
+    // Sort by distance
+    enrichedProducts.sort((a, b) => (a.distanceKm || 0) - (b.distanceKm || 0));
+
+    const response = {
+      products: enrichedProducts,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / parseInt(limit))
+      },
+      meta: {
+        userLocation: { lat: latitude, lng: longitude },
+        radiusKm: parseFloat(radius),
+        nearbyShopsCount: nearbyShops.length
+      }
+    };
+
+    if (page == 1) {
+      await CacheService.set(cacheKey, response, 120); // 2 min cache
+    }
+
+    ResponseHandler.success(res, response, 'Nearby products fetched successfully');
+  } catch (error) {
+    logger.error(`Get nearby products error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
