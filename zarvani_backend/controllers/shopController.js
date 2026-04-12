@@ -882,3 +882,138 @@ exports.updateOrderStatus = async (req, res) => {
 };
 
 // Cache invalidation now handled by CacheInvalidationService
+
+// ========================== NEARBY SHOPS (Blinkit/Swiggy Style) ==========================
+// GET /api/v1/shops/public/nearby?lat=X&lng=Y&radius=5&category=grocery
+exports.getNearbyShops = async (req, res) => {
+  try {
+    const { lat, lng, radius = 5, category, limit = 20 } = req.query;
+
+    if (!lat || !lng) {
+      return ResponseHandler.error(res, 'lat and lng query params are required', 400);
+    }
+
+    const latitude = parseFloat(lat);
+    const longitude = parseFloat(lng);
+    const radiusMeters = parseFloat(radius) * 1000;
+
+    // Build cache key
+    const cacheKey = `shops:nearby:${latitude.toFixed(3)},${longitude.toFixed(3)}:r${radius}:${category || 'all'}`;
+    const cached = await CacheService.get(cacheKey);
+    if (cached) {
+      return ResponseHandler.success(res, cached, 'Nearby shops fetched from cache');
+    }
+
+    const matchStage = {
+      isActive: true,
+      verificationStatus: 'approved'
+    };
+    if (category) matchStage.categories = category;
+
+    const shops = await Shop.aggregate([
+      {
+        $geoNear: {
+          near: { type: 'Point', coordinates: [longitude, latitude] },
+          distanceField: 'distance',        // distance in metres
+          maxDistance: radiusMeters,
+          spherical: true,
+          query: matchStage
+        }
+      },
+      {
+        $addFields: {
+          distanceKm: { $divide: ['$distance', 1000] },
+          // Estimated delivery time based on distance + shop's own setting
+          estimatedDeliveryMin: {
+            $add: [
+              '$deliverySettings.estimatedDeliveryTime.min',
+              { $multiply: [{ $divide: ['$distance', 1000] }, 3] } // +3 min per km
+            ]
+          }
+        }
+      },
+      { $sort: { distance: 1 } },
+      { $limit: parseInt(limit) },
+      {
+        $project: {
+          password: 0,
+          otp: 0,
+          sessions: 0,
+          resetPasswordToken: 0,
+          documents: 0,
+          'deliveryBoys.password': 0,
+          'deliveryBoys.otp': 0
+        }
+      }
+    ]);
+
+    // Tag each shop with open/closed status
+    const shopsWithStatus = shops.map(shop => {
+      const now = new Date();
+      const day = now.toLocaleString('en-US', { weekday: 'long' }).toLowerCase();
+      const daySchedule = shop.workingHours?.[day];
+      let isOpen = shop.isOpen;
+
+      if (daySchedule && daySchedule.isOpen && daySchedule.start && daySchedule.end) {
+        const [sh, sm] = daySchedule.start.split(':').map(Number);
+        const [eh, em] = daySchedule.end.split(':').map(Number);
+        const current = now.getHours() * 60 + now.getMinutes();
+        const start = sh * 60 + sm;
+        const end = eh * 60 + em;
+        isOpen = current >= start && current <= end;
+      }
+
+      return {
+        ...shop,
+        isCurrentlyOpen: isOpen,
+        distanceKm: parseFloat(shop.distanceKm.toFixed(2)),
+        estimatedDeliveryMin: Math.ceil(shop.estimatedDeliveryMin || 30)
+      };
+    });
+
+    const response = { shops: shopsWithStatus, count: shopsWithStatus.length };
+
+    // Cache for 2 minutes (location-sensitive)
+    await CacheService.set(cacheKey, response, 120);
+
+    ResponseHandler.success(res, response, 'Nearby shops fetched successfully');
+  } catch (error) {
+    logger.error(`Get nearby shops error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};
+
+// ========================== JOIN SHOP TRACKING ROOM ==========================
+// Allows shop's socket room to be joined so delivery boy positions can be shown on shop dashboard
+exports.joinShopTrackingRoom = async (req, res) => {
+  try {
+    const shopId = req.user._id;
+    const io = req.app.get('io');
+    if (io) {
+      // Emit current delivery boy positions to whoever is on the shop dashboard
+      const shop = await Shop.findById(shopId)
+        .select('deliveryBoys')
+        .lean();
+
+      const activeBoys = (shop?.deliveryBoys || [])
+        .filter(b => b.status === 'on-delivery' && b.currentLocation?.coordinates?.length > 0)
+        .map(b => ({
+          id: b._id,
+          name: b.name,
+          phone: b.phone,
+          vehicle: b.vehicle,
+          latitude: b.currentLocation.coordinates[1],
+          longitude: b.currentLocation.coordinates[0],
+          updatedAt: b.currentLocation.updatedAt,
+          assignedOrders: b.assignedOrders?.length || 0
+        }));
+
+      io.to(`shop_${shopId}`).emit('active-delivery-boys', { boys: activeBoys });
+    }
+
+    ResponseHandler.success(res, { message: 'Joined shop tracking room' }, 'OK');
+  } catch (error) {
+    logger.error(`Join shop tracking room error: ${error.message}`);
+    ResponseHandler.error(res, error.message, 500);
+  }
+};

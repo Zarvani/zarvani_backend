@@ -300,6 +300,12 @@ io.on('connection', (socket) => {
     logger.info(`Joined order room: ${orderId}`);
   });
 
+  // Join shop room for delivery boy live tracking (shop dashboard)
+  socket.on('join-shop', (shopId) => {
+    socket.join(`shop_${shopId}`);
+    logger.info(`Joined shop room: ${shopId}`);
+  });
+
   // Provider location update
   socket.on('provider-location-update', (data) => {
     const { bookingId, orderId, latitude, longitude } = data;

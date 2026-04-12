@@ -17,6 +17,10 @@ const {
 
 // ==================== PUBLIC ROUTES ====================
 
+// Nearby products — location-based product discovery (no auth needed)
+// GET /api/v1/products/public/nearby?lat=X&lng=Y&radius=5&category=grocery
+router.get('/public/nearby', productController.getNearbyProducts);
+
 // Get all products with filters (Cache for 5 mins)
 router.get("/", cacheMiddleware(300), productController.getAllProducts);
 
@@ -31,6 +35,7 @@ router.get("/utils/categories", cacheMiddleware(86400), productController.getCat
 
 // Get subcategories by category (Cache for 24 hours)
 router.get("/utils/categories/:category/subcategories", cacheMiddleware(86400), productController.getSubcategories);
+
 
 // ==================== PROTECTED ROUTES (REQUIRE AUTH) ====================
 router.use(protect);

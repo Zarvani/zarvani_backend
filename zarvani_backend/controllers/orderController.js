@@ -231,6 +231,41 @@ exports.updateDeliveryLocation = async (req, res) => {
       );
     }
 
+    // ✅ REAL-TIME: Push location update to user & shop via Socket.IO
+    const io = req.app.get('io');
+    if (io) {
+      // Broadcast to order room — user's tracking page receives this
+      io.to(`order_${orderId}`).emit('location-updated', {
+        latitude,
+        longitude,
+        address: address || null,
+        distance: distanceToUser,
+        eta: order.tracking.estimatedDeliveryTime,
+        status: order.status,
+        timestamp: new Date()
+      });
+
+      // Broadcast to shop room — shop dashboard delivery map receives this
+      io.to(`shop_${order.shop}`).emit('deliveryboy-location', {
+        deliveryBoyId: deliveryBoyId.toString(),
+        orderId,
+        latitude,
+        longitude,
+        distance: distanceToUser,
+        timestamp: new Date()
+      });
+
+      // If status changed to 'arriving', broadcast status change too
+      if (order.status === 'arriving') {
+        io.to(`user_${order.user}`).emit('status-updated', {
+          orderId,
+          status: 'arriving',
+          message: 'Your delivery partner is arriving in 2-3 minutes!',
+          timestamp: new Date()
+        });
+      }
+    }
+
     ResponseHandler.success(res, {
       distance: distanceToUser,
       eta: order.tracking.estimatedDeliveryTime,

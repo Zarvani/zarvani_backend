@@ -9,6 +9,12 @@ const {
   uploadImages 
 } = require('../middleware/uploadMiddleware');
 
+// ======================== PUBLIC ROUTES (no auth) ========================
+// Nearby shops — used by home screen, product listing, search
+// GET /api/v1/shops/public/nearby?lat=X&lng=Y&radius=5&category=grocery
+router.get('/public/nearby', shopController.getNearbyShops);
+
+// ======================== PROTECTED ROUTES ========================
 router.use(protect);
 router.use(authorize('shop'));
 
@@ -38,4 +44,8 @@ router.post(
 router.get('/delivery-boys/:id/stats', shopController.getDeliveryBoyStats);
 // Shop dashboard
 router.get('/dashboard', shopController.getDashboard);
+// Live tracking room — shop dashboard joins to see delivery boys on map
+router.post('/tracking/join', shopController.joinShopTrackingRoom);
+
 module.exports = router;
+
