@@ -14,6 +14,20 @@ class ResponseHandler {
             message
         });
     }
+
+    static paginated(res, data, page, limit, total, extraMeta = {}) {
+        return res.status(200).json({
+            success: true,
+            data,
+            meta: {
+                page: parseInt(page),
+                limit: parseInt(limit),
+                total,
+                totalPages: Math.ceil(total / limit),
+                ...extraMeta
+            }
+        });
+    }
 }
 
 module.exports = ResponseHandler;

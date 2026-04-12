@@ -22,7 +22,7 @@ router.post(
 router.get(
   '/stats',
   protect,
-  authorize('admin', 'super_admin', 'shop'),
+  authorize('admin', 'superadmin', 'shop'),
   orderController.getOrderStats
 );
 
@@ -153,7 +153,7 @@ router.get('/shops/available', orderController.getAvailableShops);
 router.get(
   '/',
   protect,
-  authorize('admin', 'super_admin'),
+  authorize('admin', 'superadmin'),
   orderController.getAllOrders
 );
 
@@ -161,7 +161,7 @@ router.get(
 router.get(
   '/:orderId',
   protect,
-  authorize('admin', 'super_admin'),
+  authorize('admin', 'superadmin'),
   orderController.getOrderadminDetails
 );
 
@@ -169,7 +169,7 @@ router.get(
 router.put(
   '/:orderId',
   protect,
-  authorize('admin', 'super_admin'),
+  authorize('admin', 'superadmin'),
   orderController.updateOrder
 );
 
@@ -177,7 +177,7 @@ router.put(
 router.put(
   '/:orderId/Admincancel',
   protect,
-  authorize('admin', 'super_admin'),
+  authorize('admin', 'superadmin'),
   orderController.AdmincancelOrder
 );
 
@@ -185,7 +185,7 @@ router.put(
 router.get(
   '/analytics/orders',
   protect,
-  authorize('admin', 'super_admin'),
+  authorize('admin', 'superadmin'),
   orderController.getOrderAnalytics
 );
 
@@ -193,7 +193,7 @@ router.get(
 router.get(
   '/export/orders',
   protect,
-  authorize('admin', 'super_admin'),
+  authorize('admin', 'superadmin'),
   orderController.exportOrders
 );
 
